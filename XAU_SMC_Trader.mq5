@@ -15,6 +15,27 @@ enum ENUM_FVG_ENTRY_MODE
    FVG_MODE_LIMIT  = 1    // Limit order at CE (Phase 2, NOT implemented)
 };
 
+enum ENUM_HTF_TF_MODE
+{
+   HTF_TF_H4_ONLY    = 0,   // Chỉ dùng H4
+   HTF_TF_D1_ONLY    = 1,   // Chỉ dùng D1
+   HTF_TF_BOTH_AND   = 2,   // H4 và D1 phải đồng thuận
+   HTF_TF_H4_PRIMARY = 3    // H4 chính, D1 fallback khi H4 neutral
+};
+
+enum ENUM_HTF_METHOD
+{
+   HTF_METHOD_SWING = 0,    // Cấu trúc swing HH/HL (chuẩn SMC)
+   HTF_METHOD_EMA   = 1,    // Giá vs EMA + slope
+   HTF_METHOD_BOTH  = 2     // Cả hai đồng thuận mới định hướng
+};
+
+enum ENUM_HTF_NEUTRAL
+{
+   NEUTRAL_ALLOW_ALL = 0,   // Neutral: vẫn cho vào lệnh cả 2 chiều
+   NEUTRAL_BLOCK_ALL = 1    // Neutral: chặn mọi entry mới
+};
+
 input group "=== TRADE SETTINGS ==="
 input double   RiskPercent      = 1.0;
 input double   MinRR            = 1.5;
@@ -52,6 +73,17 @@ input bool                FVG_RequireUnmitigated = true;   // loại FVG đã b�
 input bool                FVG_MustOverlapOB      = false;  // yêu cầu FVG overlap vùng OB H1
 input double              FVG_EntryLevelPct      = 0.5;    // [Phase 2] mức vào trong gap: 0.5 = CE
 input int                 FVG_ExpiryBars         = 12;     // [Phase 2] pending hết hạn sau N nến M5
+
+input group "=== HTF BIAS FILTER (H4/D1) [FEAT-P1-010] ==="
+input bool                 UseHTFBiasFilter     = true;             // bật/tắt bias filter (A/B test)
+input ENUM_HTF_TF_MODE     HTF_TF_Mode          = HTF_TF_H4_ONLY;   // khung bias: H4 / D1 / kết hợp
+input ENUM_HTF_METHOD      HTF_Method           = HTF_METHOD_SWING; // phương pháp: swing / EMA / both
+input ENUM_HTF_NEUTRAL     HTF_NeutralPolicy    = NEUTRAL_ALLOW_ALL;// hành vi khi bias = neutral
+input int                  HTF_Lookback         = 120;              // số nến HTF quét swing
+input int                  HTF_SwingDistance    = 3;                // distance xác nhận swing (2 bên)
+input double               HTF_PromMult         = 0.5;              // prominence = mult * ATR(TF)
+input int                  HTF_EMA_Period       = 50;               // chu kỳ EMA (method EMA/BOTH)
+input double               HTF_EMAFlatATRMult   = 0.05;             // |slope| <= mult*ATR => EMA phẳng => neutral
 
 input group "=== POSITION MANAGEMENT (R-multiple based) ==="
 input double   PartialAtR       = 1.0;   // start partial close once profit >= 1.0 x initial risk
@@ -146,6 +178,26 @@ struct CHoCHResult
    int    trigger_peak_idx; // [FEAT-P1-009] index swing bị phá
 };
 
+// === [FEAT-P1-010] HTF Bias result ===
+struct HTFBiasInfo
+{
+   int      bias;            // +1 bullish, -1 bearish, 0 neutral
+   int      swing_bias;      // thành phần swing (để log/debug)
+   int      ema_bias;        // thành phần EMA (để log/debug)
+   double   sh1, sh2;        // 2 swing high gần nhất (0 nếu không đủ)
+   double   sl1, sl2;        // 2 swing low gần nhất
+   datetime computed_bar;    // bar time HTF tại lần tính (cache key)
+};
+
+#define HTF_ATR_PERIOD 14
+int         hATR_H4  = INVALID_HANDLE;
+int         hATR_D1  = INVALID_HANDLE;
+int         hEMA_H4  = INVALID_HANDLE;
+int         hEMA_D1  = INVALID_HANDLE;
+HTFBiasInfo g_BiasH4;
+HTFBiasInfo g_BiasD1;
+int         g_BiasCached = 0;
+
 //+------------------------------------------------------------------+
 int OnInit()
 {
@@ -167,6 +219,40 @@ int OnInit()
       Print("Init Failed: ATR handle error");
       return INIT_FAILED;
    }
+   
+   if(UseHTFBiasFilter)
+   {
+      bool use_h4 = (HTF_TF_Mode == HTF_TF_H4_ONLY || HTF_TF_Mode == HTF_TF_BOTH_AND || HTF_TF_Mode == HTF_TF_H4_PRIMARY);
+      bool use_d1 = (HTF_TF_Mode == HTF_TF_D1_ONLY || HTF_TF_Mode == HTF_TF_BOTH_AND || HTF_TF_Mode == HTF_TF_H4_PRIMARY);
+      bool use_ema = (HTF_Method == HTF_METHOD_EMA || HTF_Method == HTF_METHOD_BOTH);
+
+      if(use_h4)
+      {
+         hATR_H4 = iATR(_Symbol, PERIOD_H4, HTF_ATR_PERIOD);
+         if(hATR_H4 == INVALID_HANDLE) { Print("Init Failed: ATR H4 handle error"); return INIT_FAILED; }
+         
+         if(use_ema)
+         {
+            hEMA_H4 = iMA(_Symbol, PERIOD_H4, HTF_EMA_Period, 0, MODE_EMA, PRICE_CLOSE);
+            if(hEMA_H4 == INVALID_HANDLE) { Print("Init Failed: EMA H4 handle error"); return INIT_FAILED; }
+         }
+      }
+      
+      if(use_d1)
+      {
+         hATR_D1 = iATR(_Symbol, PERIOD_D1, HTF_ATR_PERIOD);
+         if(hATR_D1 == INVALID_HANDLE) { Print("Init Failed: ATR D1 handle error"); return INIT_FAILED; }
+         
+         if(use_ema)
+         {
+            hEMA_D1 = iMA(_Symbol, PERIOD_D1, HTF_EMA_Period, 0, MODE_EMA, PRICE_CLOSE);
+            if(hEMA_D1 == INVALID_HANDLE) { Print("Init Failed: EMA D1 handle error"); return INIT_FAILED; }
+         }
+      }
+      
+      ZeroMemory(g_BiasH4);
+      ZeroMemory(g_BiasD1);
+   }
 
    ZeroMemory(g_LossZones);
    return INIT_SUCCEEDED;
@@ -177,6 +263,11 @@ void OnDeinit(const int reason)
 {
    IndicatorRelease(hATR_H1);
    IndicatorRelease(hATR_M5);
+   
+   if(hATR_H4 != INVALID_HANDLE) IndicatorRelease(hATR_H4);
+   if(hATR_D1 != INVALID_HANDLE) IndicatorRelease(hATR_D1);
+   if(hEMA_H4 != INVALID_HANDLE) IndicatorRelease(hEMA_H4);
+   if(hEMA_D1 != INVALID_HANDLE) IndicatorRelease(hEMA_D1);
 }
 
 //+------------------------------------------------------------------+
@@ -323,8 +414,25 @@ void OnTick()
 
    if(Spread > SpreadFilter) return;
 
+   // === [FEAT-P1-010] HTF Bias update (cached per HTF bar) ===
+   if(UseHTFBiasFilter)
+   {
+      if(!UpdateHTFBias()) return;   // thiếu dữ liệu HTF -> không giao dịch (fail-safe)
+   }
+   // === end FEAT-P1-010 (update) ===
+
    OBZone ob;
    if(!GetOB_H1(ob)) return;
+
+   // === [FEAT-P1-010] Bias direction gate ===
+   if(UseHTFBiasFilter && !CheckHTFBiasDirection(ob.ob_type))
+   {
+      PrintFormat("[FEAT-P1-010] Reject: OB %s ngược bias H4=%+d D1=%+d (cached=%+d)",
+                  ob.ob_type == 1 ? "BULL" : "BEAR",
+                  g_BiasH4.bias, g_BiasD1.bias, g_BiasCached);
+      return;
+   }
+   // === end FEAT-P1-010 (gate) ===
 
    if(IsZoneBlocked(ob.top, ob.bottom)) return;
 
@@ -958,6 +1066,168 @@ bool IsTrough(const double &low[], int idx, int dist, double prominence)
 }
 
 //+------------------------------------------------------------------+
+//| [FEAT-P1-010] Tính bias cho 1 khung thời gian (H4 hoặc D1)       |
+//| Tự cache theo computed_bar; chỉ recompute khi có nến TF mới      |
+//+------------------------------------------------------------------+
+bool ComputeTFBias(const ENUM_TIMEFRAMES tf,
+                   const int atr_handle,
+                   const int ema_handle,
+                   HTFBiasInfo &info)
+{
+   datetime tf_bar = iTime(_Symbol, tf, 0);
+   if(info.computed_bar == tf_bar) return true;
+
+   int old_bias = info.bias;
+   
+   info.bias = 0;
+   info.swing_bias = 0;
+   info.ema_bias = 0;
+   info.sh1 = 0; info.sh2 = 0;
+   info.sl1 = 0; info.sl2 = 0;
+   
+   int bars = HTF_Lookback + HTF_SwingDistance + 3;
+   
+   double high_arr[], low_arr[], close_arr[];
+   ArraySetAsSeries(high_arr, true);
+   ArraySetAsSeries(low_arr, true);
+   ArraySetAsSeries(close_arr, true);
+   
+   if(CopyHigh(_Symbol, tf, 0, bars, high_arr) < bars) return false;
+   if(CopyLow(_Symbol, tf, 0, bars, low_arr) < bars) return false;
+   if(CopyClose(_Symbol, tf, 0, bars, close_arr) < bars) return false;
+   
+   double atr_ref = 0;
+   bool need_swing = (HTF_Method == HTF_METHOD_SWING || HTF_Method == HTF_METHOD_BOTH);
+   bool need_ema = (HTF_Method == HTF_METHOD_EMA || HTF_Method == HTF_METHOD_BOTH);
+
+   if(atr_handle != INVALID_HANDLE)
+   {
+      double atr_arr[];
+      ArraySetAsSeries(atr_arr, true);
+      if(CopyBuffer(atr_handle, 0, 0, HTF_SwingDistance + 2, atr_arr) >= HTF_SwingDistance + 2)
+      {
+         atr_ref = atr_arr[HTF_SwingDistance + 1];
+      }
+   }
+
+   if(need_swing)
+   {
+      if(atr_handle == INVALID_HANDLE || atr_ref <= 0) return false;
+      
+      double prom = atr_ref * HTF_PromMult;
+      
+      int p_count = 0;
+      for(int i = HTF_SwingDistance + 1; i < bars - HTF_SwingDistance; i++)
+      {
+         if(IsPeak(high_arr, i, HTF_SwingDistance, prom))
+         {
+            if(p_count == 0) { info.sh1 = high_arr[i]; p_count++; }
+            else if(p_count == 1) { info.sh2 = high_arr[i]; p_count++; break; }
+         }
+      }
+      
+      int t_count = 0;
+      for(int i = HTF_SwingDistance + 1; i < bars - HTF_SwingDistance; i++)
+      {
+         if(IsTrough(low_arr, i, HTF_SwingDistance, prom))
+         {
+            if(t_count == 0) { info.sl1 = low_arr[i]; t_count++; }
+            else if(t_count == 1) { info.sl2 = low_arr[i]; t_count++; break; }
+         }
+      }
+      
+      if(p_count == 2 && t_count == 2)
+      {
+         if(info.sh1 > info.sh2 && info.sl1 > info.sl2) info.swing_bias = 1;
+         else if(info.sh1 < info.sh2 && info.sl1 < info.sl2) info.swing_bias = -1;
+      }
+   }
+   
+   if(need_ema)
+   {
+      if(ema_handle == INVALID_HANDLE) return false;
+      double ema_arr[];
+      ArraySetAsSeries(ema_arr, true);
+      if(CopyBuffer(ema_handle, 0, 0, 3, ema_arr) < 3) return false;
+      
+      if(atr_ref <= 0) return false; 
+      
+      bool flat = (MathAbs(ema_arr[1] - ema_arr[2]) <= atr_ref * HTF_EMAFlatATRMult);
+      if(!flat)
+      {
+         if(close_arr[1] > ema_arr[1] && ema_arr[1] > ema_arr[2]) info.ema_bias = 1;
+         else if(close_arr[1] < ema_arr[1] && ema_arr[1] < ema_arr[2]) info.ema_bias = -1;
+      }
+   }
+   
+   if(HTF_Method == HTF_METHOD_SWING) info.bias = info.swing_bias;
+   else if(HTF_Method == HTF_METHOD_EMA) info.bias = info.ema_bias;
+   else if(HTF_Method == HTF_METHOD_BOTH)
+   {
+      if(info.swing_bias == info.ema_bias) info.bias = info.swing_bias;
+      else info.bias = 0;
+   }
+   
+   if(info.bias != old_bias)
+   {
+      PrintFormat("[FEAT-P1-010] Bias flip TF %s: %d -> %d | sh1=%.2f sh2=%.2f sl1=%.2f sl2=%.2f",
+                  EnumToString(tf), old_bias, info.bias, info.sh1, info.sh2, info.sl1, info.sl2);
+   }
+   
+   info.computed_bar = tf_bar;
+   return true;
+}
+
+//+------------------------------------------------------------------+
+//| [FEAT-P1-010] Cập nhật bias tổng hợp theo HTF_TF_Mode            |
+//| Gọi 1 lần mỗi nến M5 mới trong OnTick, TRƯỚC GetOB_H1            |
+//+------------------------------------------------------------------+
+bool UpdateHTFBias()
+{
+   bool use_h4 = (HTF_TF_Mode == HTF_TF_H4_ONLY || HTF_TF_Mode == HTF_TF_BOTH_AND || HTF_TF_Mode == HTF_TF_H4_PRIMARY);
+   bool use_d1 = (HTF_TF_Mode == HTF_TF_D1_ONLY || HTF_TF_Mode == HTF_TF_BOTH_AND || HTF_TF_Mode == HTF_TF_H4_PRIMARY);
+
+   if(use_h4)
+   {
+      if(!ComputeTFBias(PERIOD_H4, hATR_H4, hEMA_H4, g_BiasH4)) return false;
+   }
+   if(use_d1)
+   {
+      if(!ComputeTFBias(PERIOD_D1, hATR_D1, hEMA_D1, g_BiasD1)) return false;
+   }
+
+   if(HTF_TF_Mode == HTF_TF_H4_ONLY)
+      g_BiasCached = g_BiasH4.bias;
+   else if(HTF_TF_Mode == HTF_TF_D1_ONLY)
+      g_BiasCached = g_BiasD1.bias;
+   else if(HTF_TF_Mode == HTF_TF_BOTH_AND)
+   {
+      if(g_BiasH4.bias == g_BiasD1.bias && g_BiasH4.bias != 0)
+         g_BiasCached = g_BiasH4.bias;
+      else
+         g_BiasCached = 0;
+   }
+   else if(HTF_TF_Mode == HTF_TF_H4_PRIMARY)
+   {
+      if(g_BiasH4.bias != 0)
+         g_BiasCached = g_BiasH4.bias;
+      else
+         g_BiasCached = g_BiasD1.bias;
+   }
+
+   return true;
+}
+
+//+------------------------------------------------------------------+
+//| [FEAT-P1-010] Kiểm tra hướng setup có khớp bias không            |
+//+------------------------------------------------------------------+
+bool CheckHTFBiasDirection(const int setup_direction)
+{
+   if(g_BiasCached == 0) return (HTF_NeutralPolicy == NEUTRAL_ALLOW_ALL);
+   return (setup_direction == g_BiasCached);
+}
+
+//+------------------------------------------------------------------+
 bool HasOpenPosition()
 {
    for(int i = PositionsTotal()-1; i >= 0; i--)
@@ -1186,4 +1456,7 @@ bool SafeOrderSend(const ENUM_ORDER_TYPE type, const double lot,
 //| input group FVG, struct FVGZone, mở rộng CHoCHResult (+sweep_bar,|
 //| +trigger_peak_idx), hàm DetectFVG_M5 + CheckFVGConfluence, gate  |
 //| confluence sau CHoCH trong OnTick (Phase 1: filter mode).        |
+//| [FEAT-P1-010] 2026-07-26: HTF Bias Filter (H4/D1), swing structure|
+//| (tái dùng IsPeak/IsTrough) + EMA, 4 chế độ đa khung, neutral policy,|
+//| cache bias theo nến HTF, gate hướng sau GetOB_H1 trong OnTick.   |
 //+------------------------------------------------------------------+
