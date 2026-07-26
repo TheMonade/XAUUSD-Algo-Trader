@@ -9,6 +9,12 @@
 #include <Trade\PositionInfo.mqh>
 #include <Indicators\Indicators.mqh>
 
+enum ENUM_FVG_ENTRY_MODE
+{
+   FVG_MODE_FILTER = 0,   // FVG filter mode, entry market (Phase 1, implement)
+   FVG_MODE_LIMIT  = 1    // Limit order at CE (Phase 2, NOT implemented)
+};
+
 input group "=== TRADE SETTINGS ==="
 input double   RiskPercent      = 1.0;
 input double   MinRR            = 1.5;
@@ -34,6 +40,18 @@ input double   Sweep_MinPen_ATR_Mult   = 0.05;  // độ xuyên tối thiểu = 
 input double   Sweep_MaxPen_ATR_Mult   = 2.0;   // độ xuyên tối đa (quá sâu = breakdown)
 input int      Sweep_MaxAgeBars        = 36;    // sweep phải xảy ra trong N nến M5 gần nhất
 input double   Sweep_BodyClosePct      = 0.0;   // % thân nến tối thiểu đóng trên ref_level
+
+input group "=== FVG (M5) [FEAT-P1-009] ==="
+input bool                UseFVGFilter           = true;   // bật/tắt filter FVG (A/B test)
+input ENUM_FVG_ENTRY_MODE FVG_EntryMode          = FVG_MODE_FILTER; // Phase 2 chưa dùng
+input double              FVG_MinGapATRMult      = 0.10;   // gap tối thiểu = mult * ATR(M5)
+input double              FVG_MaxGapATRMult      = 3.0;    // gap tối đa (quá lớn = news spike)
+input double              FVG_DispATRMult        = 1.0;    // nến giữa phải có body > mult * ATR
+input int                 FVG_MaxAgeBars         = 24;     // FVG phải hình thành trong N nến M5 gần nhất
+input bool                FVG_RequireUnmitigated = true;   // loại FVG đã bị close xuyên qua
+input bool                FVG_MustOverlapOB      = false;  // yêu cầu FVG overlap vùng OB H1
+input double              FVG_EntryLevelPct      = 0.5;    // [Phase 2] mức vào trong gap: 0.5 = CE
+input int                 FVG_ExpiryBars         = 12;     // [Phase 2] pending hết hạn sau N nến M5
 
 input group "=== POSITION MANAGEMENT (R-multiple based) ==="
 input double   PartialAtR       = 1.0;   // start partial close once profit >= 1.0 x initial risk
@@ -105,12 +123,27 @@ struct SweepInfo
    datetime sweep_time;     // thời điểm sweep (logging)
 };
 
+// === [FEAT-P1-009] FVG result ===
+struct FVGZone
+{
+   bool     found;
+   int      fvg_type;      // +1 bullish, -1 bearish
+   double   top;
+   double   bottom;
+   double   ce;            // consequent encroachment = (top+bottom)/2
+   double   gap_size;      // top - bottom
+   int      bar_index;     // index nến C (mới nhất của cụm 3 nến), series
+   datetime time_found;
+};
+
 struct CHoCHResult
 {
    string choch_type;
    double smart_sl;
    bool   sweep_confirmed;  // [FEAT-P1-008]
    double sweep_level;      // [FEAT-P1-008]
+   int    sweep_bar;        // [FEAT-P1-009] index nến sweep (-1 nếu UseSweepFilter=false)
+   int    trigger_peak_idx; // [FEAT-P1-009] index swing bị phá
 };
 
 //+------------------------------------------------------------------+
@@ -297,6 +330,22 @@ void OnTick()
 
    CHoCHResult choch;
    if(!DetectCHoCH_M5(ob, choch)) return;
+
+   // === [FEAT-P1-009] FVG confluence ===
+   FVGZone fvg;
+   if(UseFVGFilter)
+   {
+      if(!CheckFVGConfluence(ob, choch, fvg))
+      {
+         PrintFormat("[FEAT-P1-009] Reject: no valid FVG | OB %s [%.2f-%.2f]",
+                     ob.ob_type == 1 ? "BULL" : "BEAR", ob.bottom, ob.top);
+         return;
+      }
+      PrintFormat("[FEAT-P1-009] FVG %s [%.2f-%.2f] CE=%.2f gap=%.2f bar=%d",
+                  fvg.fvg_type == 1 ? "BULL" : "BEAR",
+                  fvg.bottom, fvg.top, fvg.ce, fvg.gap_size, fvg.bar_index);
+   }
+   // === end FEAT-P1-009 ===
 
    double entry, sl_price, tp_price;
    ENUM_ORDER_TYPE order_type;
@@ -561,6 +610,171 @@ bool DetectLiquiditySweep_M5(const int direction,
 }
 
 //+------------------------------------------------------------------+
+//| [FEAT-P1-009] Fair Value Gap Detection on M5                     |
+//| direction: +1 = bullish FVG, -1 = bearish FVG                    |
+//| max_bar: biên trên cửa sổ quét (= choch.trigger_peak_idx)        |
+//| Arrays: series, đã copy đủ CHoCH_Lookback + 3 bars               |
+//+------------------------------------------------------------------+
+bool DetectFVG_M5(const int direction,
+                  const int max_bar,
+                  const double &high[],
+                  const double &low[],
+                  const double &open[],
+                  const double &close[],
+                  const double atr_val,
+                  FVGZone &fvg)
+{
+   ZeroMemory(fvg); 
+   fvg.found = false; 
+   fvg.bar_index = -1;
+   
+   if(atr_val <= 0) return false;
+   
+   int window_end = MathMin(max_bar - 2, FVG_MaxAgeBars);
+   double min_gap = atr_val * FVG_MinGapATRMult;
+   double max_gap = atr_val * FVG_MaxGapATRMult;
+   double disp    = atr_val * FVG_DispATRMult;
+   
+   for(int i = 1; i <= window_end; i++)
+   {
+      if(i + 2 >= ArraySize(high) || i + 2 >= ArraySize(low) || 
+         i + 2 >= ArraySize(open) || i + 2 >= ArraySize(close)) continue;
+         
+      if(direction == 1) // Bullish
+      {
+         if(close[i+1] > open[i+1] && MathAbs(close[i+1] - open[i+1]) > disp)
+         {
+            if(low[i] > high[i+2])
+            {
+               double gap_top = low[i];
+               double gap_bottom = high[i+2];
+               double gap_size = gap_top - gap_bottom;
+               
+               if(gap_size >= min_gap && gap_size <= max_gap)
+               {
+                  bool is_mitigated = false;
+                  if(FVG_RequireUnmitigated)
+                  {
+                     for(int j = i - 1; j >= 1; j--)
+                     {
+                        if(close[j] < gap_bottom)
+                        {
+                           is_mitigated = true;
+                           break;
+                        }
+                     }
+                  }
+                  if(!is_mitigated)
+                  {
+                     fvg.found = true;
+                     fvg.fvg_type = 1;
+                     fvg.top = gap_top;
+                     fvg.bottom = gap_bottom;
+                     fvg.ce = (gap_top + gap_bottom) / 2.0;
+                     fvg.gap_size = gap_size;
+                     fvg.bar_index = i;
+                     fvg.time_found = iTime(_Symbol, PERIOD_M5, i);
+                     return true;
+                  }
+               }
+            }
+         }
+      }
+      else if(direction == -1) // Bearish
+      {
+         if(close[i+1] < open[i+1] && MathAbs(close[i+1] - open[i+1]) > disp)
+         {
+            if(high[i] < low[i+2])
+            {
+               double gap_top = low[i+2];
+               double gap_bottom = high[i];
+               double gap_size = gap_top - gap_bottom;
+               
+               if(gap_size >= min_gap && gap_size <= max_gap)
+               {
+                  bool is_mitigated = false;
+                  if(FVG_RequireUnmitigated)
+                  {
+                     for(int j = i - 1; j >= 1; j--)
+                     {
+                        if(close[j] > gap_top)
+                        {
+                           is_mitigated = true;
+                           break;
+                        }
+                     }
+                  }
+                  if(!is_mitigated)
+                  {
+                     fvg.found = true;
+                     fvg.fvg_type = -1;
+                     fvg.top = gap_top;
+                     fvg.bottom = gap_bottom;
+                     fvg.ce = (gap_top + gap_bottom) / 2.0;
+                     fvg.gap_size = gap_size;
+                     fvg.bar_index = i;
+                     fvg.time_found = iTime(_Symbol, PERIOD_M5, i);
+                     return true;
+                  }
+               }
+            }
+         }
+      }
+   }
+   return false;
+}
+
+//+------------------------------------------------------------------+
+//| [FEAT-P1-009] Orchestrator: copy M5 arrays + gọi DetectFVG_M5    |
+//| Gọi SAU DetectCHoCH_M5 thành công, TRƯỚC khi tính SL/TP          |
+//+------------------------------------------------------------------+
+bool CheckFVGConfluence(const OBZone &ob, const CHoCHResult &choch, FVGZone &fvg)
+{
+   int bars = CHoCH_Lookback + 3;
+   double high_m5[], low_m5[], open_m5[], close_m5[], atr_m5[];
+   
+   ArraySetAsSeries(high_m5, true);
+   ArraySetAsSeries(low_m5, true);
+   ArraySetAsSeries(open_m5, true);
+   ArraySetAsSeries(close_m5, true);
+   ArraySetAsSeries(atr_m5, true);
+   
+   if(CopyHigh(_Symbol, PERIOD_M5, 0, bars, high_m5) < bars) return false;
+   if(CopyLow(_Symbol, PERIOD_M5, 0, bars, low_m5) < bars) return false;
+   if(CopyOpen(_Symbol, PERIOD_M5, 0, bars, open_m5) < bars) return false;
+   if(CopyClose(_Symbol, PERIOD_M5, 0, bars, close_m5) < bars) return false;
+   if(CopyBuffer(hATR_M5, 0, 0, 2, atr_m5) < 2) return false;
+   
+   double atr_val = atr_m5[1];
+   if(atr_val <= 0) return false;
+   
+   if(!DetectFVG_M5(ob.ob_type, choch.trigger_peak_idx, high_m5, low_m5, open_m5, close_m5, atr_val, fvg))
+      return false;
+      
+   if(FVG_MustOverlapOB && fvg.found)
+   {
+      if(ob.ob_type == 1) // Bullish
+      {
+         if(fvg.bottom > ob.top) 
+         {
+            fvg.found = false;
+            return false;
+         }
+      }
+      else if(ob.ob_type == -1) // Bearish
+      {
+         if(fvg.top < ob.bottom)
+         {
+            fvg.found = false;
+            return false;
+         }
+      }
+   }
+   
+   return true;
+}
+
+//+------------------------------------------------------------------+
 bool DetectCHoCH_M5(const OBZone &ob, CHoCHResult &result)
 {
    int bars = CHoCH_Lookback + 3;
@@ -611,6 +825,7 @@ bool DetectCHoCH_M5(const OBZone &ob, CHoCHResult &result)
 
       if(close_m5[1] > last_swing_high && close_m5[2] <= last_swing_high)
       {
+         result.trigger_peak_idx = last_peak_idx;
          if(UseSweepFilter)
          {
             SweepInfo sweep;
@@ -620,6 +835,7 @@ bool DetectCHoCH_M5(const OBZone &ob, CHoCHResult &result)
             result.smart_sl = sweep.sweep_extreme;
             result.sweep_confirmed = true;
             result.sweep_level = sweep.ref_level;
+            result.sweep_bar = sweep.sweep_bar;
          }
          else
          {
@@ -630,6 +846,7 @@ bool DetectCHoCH_M5(const OBZone &ob, CHoCHResult &result)
             result.smart_sl = lowest_low;
             result.sweep_confirmed = false;
             result.sweep_level = 0.0;
+            result.sweep_bar = -1;
          }
 
          if(result.smart_sl > ob.top) return false;
@@ -669,6 +886,7 @@ bool DetectCHoCH_M5(const OBZone &ob, CHoCHResult &result)
 
       if(close_m5[1] < last_swing_low && close_m5[2] >= last_swing_low)
       {
+         result.trigger_peak_idx = last_trough_idx;
          if(UseSweepFilter)
          {
             SweepInfo sweep;
@@ -678,6 +896,7 @@ bool DetectCHoCH_M5(const OBZone &ob, CHoCHResult &result)
             result.smart_sl = sweep.sweep_extreme;
             result.sweep_confirmed = true;
             result.sweep_level = sweep.ref_level;
+            result.sweep_bar = sweep.sweep_bar;
          }
          else
          {
@@ -688,6 +907,7 @@ bool DetectCHoCH_M5(const OBZone &ob, CHoCHResult &result)
             result.smart_sl = highest_high;
             result.sweep_confirmed = false;
             result.sweep_level = 0.0;
+            result.sweep_bar = -1;
          }
 
          if(result.smart_sl < ob.bottom) return false;
@@ -962,4 +1182,8 @@ bool SafeOrderSend(const ENUM_ORDER_TYPE type, const double lot,
 //| [FEAT-P1-008] 2026-07-24: Liquidity Sweep Detection , thêm input |
 //| group SWEEP, struct SweepInfo, hàm DetectLiquiditySweep_M5,      |
 //| tích hợp filter + Smart SL theo sweep_extreme vào DetectCHoCH_M5 |
+//| [FEAT-P1-009] 2026-07-24: FVG (Fair Value Gap) Detection, thêm   |
+//| input group FVG, struct FVGZone, mở rộng CHoCHResult (+sweep_bar,|
+//| +trigger_peak_idx), hàm DetectFVG_M5 + CheckFVGConfluence, gate  |
+//| confluence sau CHoCH trong OnTick (Phase 1: filter mode).        |
 //+------------------------------------------------------------------+
