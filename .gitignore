@@ -1,0 +1,10 @@
+Advisors/
+Examples/
+Free Robots/
+desktop.ini
+
+*.ex5
+
+.DS_Store
+Thumbs.db
+*.log
