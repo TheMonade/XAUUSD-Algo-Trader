@@ -1,4 +1,4 @@
-﻿# XAUUSD-SMC-Algorithmic-Trader
+﻿# XAUUSD-Algo-Trader
 This is a project still quite underdevelopment featuring an automated trading system designed for MT5 and currently focused on the Smart Money Concept for XAUUSD (Gold)
 
 ## Architecture
