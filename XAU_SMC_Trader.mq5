@@ -9,6 +9,10 @@
 #include <Trade\PositionInfo.mqh>
 #include <Indicators\Indicators.mqh>
 
+// === [FEAT-P0-012] Stops Level Clamp — hằng số kỹ thuật, KHÔNG phải tham số chiến lược ===
+#define STOPS_SAFETY_POINTS   2     // buffer chống giá dịch giữa lúc tính và lúc lệnh tới server
+#define STOPS_SPREAD_MULT     2.0   // sàn động = mult * spread hiện tại (cho broker báo STOPS_LEVEL=0)
+
 enum ENUM_FVG_ENTRY_MODE
 {
    FVG_MODE_FILTER = 0,   // FVG filter mode, entry market (Phase 1, implement)
@@ -36,15 +40,21 @@ enum ENUM_HTF_NEUTRAL
    NEUTRAL_BLOCK_ALL = 1    // Neutral: chặn mọi entry mới
 };
 
+enum ENUM_SESSION_TIMEBASE
+{
+   TIMEBASE_SERVER = 0,   // Giờ nhập = giờ server broker (khuyến nghị cho broker GMT+2/+3)
+   TIMEBASE_GMT    = 1    // Giờ nhập = GMT, quy đổi qua Session_GMT_Offset
+};
+
 input group "=== TRADE SETTINGS ==="
 input double   RiskPercent      = 1.0;
-input double   MinRR            = 1.5;
+input double   MinRR            = 1.0;
 input int      MagicNumber      = 202405;
 
 input group "=== ORDER BLOCK (H1) ==="
 input int      OB_Lookback      = 100;
 input int      OB_ATR_Period    = 15;
-input double   OB_ATR_Mult      = 1.5;
+input double   OB_ATR_Mult      = 1.0;
 
 input group "=== SL BUFFER (ATR-based, not fixed $) ==="
 input double   SL_Buffer_ATR_Mult = 0.15;   // buffer = this * M5 ATR (was fixed $0.50)
@@ -52,7 +62,7 @@ input double   SL_Buffer_ATR_Mult = 0.15;   // buffer = this * M5 ATR (was fixed
 input group "=== CHoCH (M5) ==="
 input int      CHoCH_Lookback   = 100;
 input int      ATR_Period_M5    = 14;
-input double   CHoCH_Prom_Mult  = 0.5;
+input double   CHoCH_Prom_Mult  = 0.2;
 input int      Peak_Distance    = 5;
 
 input group "=== LIQUIDITY SWEEP (M5) ==="
@@ -63,7 +73,7 @@ input int      Sweep_MaxAgeBars        = 36;    // sweep phải xảy ra trong N
 input double   Sweep_BodyClosePct      = 0.0;   // % thân nến tối thiểu đóng trên ref_level
 
 input group "=== FVG (M5) [FEAT-P1-009] ==="
-input bool                UseFVGFilter           = true;   // bật/tắt filter FVG (A/B test)
+input bool                UseFVGFilter           = false;   // bật/tắt filter FVG (A/B test)
 input ENUM_FVG_ENTRY_MODE FVG_EntryMode          = FVG_MODE_FILTER; // Phase 2 chưa dùng
 input double              FVG_MinGapATRMult      = 0.10;   // gap tối thiểu = mult * ATR(M5)
 input double              FVG_MaxGapATRMult      = 3.0;    // gap tối đa (quá lớn = news spike)
@@ -75,7 +85,7 @@ input double              FVG_EntryLevelPct      = 0.5;    // [Phase 2] mức v�
 input int                 FVG_ExpiryBars         = 12;     // [Phase 2] pending hết hạn sau N nến M5
 
 input group "=== HTF BIAS FILTER (H4/D1) [FEAT-P1-010] ==="
-input bool                 UseHTFBiasFilter     = true;             // bật/tắt bias filter (A/B test)
+input bool                 UseHTFBiasFilter     = false;             // bật/tắt bias filter (A/B test)
 input ENUM_HTF_TF_MODE     HTF_TF_Mode          = HTF_TF_H4_ONLY;   // khung bias: H4 / D1 / kết hợp
 input ENUM_HTF_METHOD      HTF_Method           = HTF_METHOD_SWING; // phương pháp: swing / EMA / both
 input ENUM_HTF_NEUTRAL     HTF_NeutralPolicy    = NEUTRAL_ALLOW_ALL;// hành vi khi bias = neutral
@@ -84,6 +94,27 @@ input int                  HTF_SwingDistance    = 3;                // distance 
 input double               HTF_PromMult         = 0.5;              // prominence = mult * ATR(TF)
 input int                  HTF_EMA_Period       = 50;               // chu kỳ EMA (method EMA/BOTH)
 input double               HTF_EMAFlatATRMult   = 0.05;             // |slope| <= mult*ATR => EMA phẳng => neutral
+
+input group "=== SESSION / KILL-ZONE FILTER [FEAT-P1-011] ==="
+// LUU Y: default gio SERVER cho broker GMT+2/+3 (US DST). Broker khac timezone
+// phai chinh lai gio, hoac dung TIMEBASE_GMT + Session_GMT_Offset.
+input bool                  UseSessionFilter      = false;             // bật/tắt session filter (A/B test)
+input ENUM_SESSION_TIMEBASE Session_TimeBase      = TIMEBASE_SERVER;  // giờ nhập theo server hay GMT
+input int                   Session_GMT_Offset    = 2;                // offset broker vs GMT (chỉ dùng khi TIMEBASE_GMT)
+input bool                  UseLondonKZ           = true;             // London Kill-zone
+input double                London_StartHour      = 9.0;              // 9.0 = 09:00 server ≈ 07:00 GMT (broker GMT+2/+3)
+input double                London_EndHour        = 12.0;             // hỗ trợ lẻ: 12.5 = 12:30
+input bool                  UseNewYorkKZ          = true;             // New York Kill-zone
+input double                NewYork_StartHour     = 14.0;             // 14:00 server ≈ 12:00 GMT
+input double                NewYork_EndHour       = 17.0;
+input bool                  UseCustomSession      = false;            // window tùy chỉnh (Asia/thí nghiệm), hỗ trợ qua nửa đêm
+input double                Custom_StartHour      = 2.0;
+input double                Custom_EndHour        = 7.0;
+input int                   Session_NoEntryBeforeEndMin = 15;         // chặn entry trong N phút cuối window (0 = tắt)
+input bool                  UseFridayCutoff       = true;             // chặn entry cuối ngày thứ 6
+input double                Friday_CutoffHour     = 20.0;             // sau giờ này thứ 6 không entry mới
+input bool                  UseMondayDelay        = false;            // chặn entry đầu ngày thứ 2
+input double                Monday_OpenHour       = 1.0;              // trước giờ này thứ 2 không entry mới
 
 input group "=== POSITION MANAGEMENT (R-multiple based) ==="
 input double   PartialAtR       = 1.0;   // start partial close once profit >= 1.0 x initial risk
@@ -114,6 +145,8 @@ double         LastTrailSL      = 0.0;
 ulong          CurrentTicket    = 0;
 ENUM_ORDER_TYPE_FILLING g_FillingMode      = ORDER_FILLING_FOK;
 int                     g_FillingFallbacks = 0;
+
+bool           g_TrailClampLogged = false;   // [FEAT-P0-012] chống spam log trailing-skip
 
 int            hATR_H1;
 int            hATR_M5;
@@ -198,6 +231,19 @@ HTFBiasInfo g_BiasH4;
 HTFBiasInfo g_BiasD1;
 int         g_BiasCached = 0;
 
+// === [FEAT-P1-011] Session window (đơn vị: phút-từ-nửa-đêm, server time) ===
+struct SessionWindow
+{
+   bool   enabled;
+   int    start_min;   // [0, 1440)
+   int    end_min;     // [0, 1440); start_min == end_min -> vô hiệu
+   string name;        // "LONDON_KZ" / "NY_KZ" / "CUSTOM" , cho logging
+};
+
+SessionWindow g_Windows[3];            // London, NewYork, Custom , resolve 1 lần trong OnInit
+string        g_SessionState = "INIT"; // tên window đang active / "OFF" , key cho transition log
+
+
 //+------------------------------------------------------------------+
 int OnInit()
 {
@@ -254,6 +300,12 @@ int OnInit()
       ZeroMemory(g_BiasD1);
    }
 
+   if(UseSessionFilter)
+   {
+      if(!ResolveSessionWindows())
+         Print("[FEAT-P1-011] WARNING: UseSessionFilter=true nhưng không có window hợp lệ , filter vô hiệu");
+   }
+
    ZeroMemory(g_LossZones);
    return INIT_SUCCEEDED;
 }
@@ -285,6 +337,167 @@ bool IsMarketTradeable()
       return false;
 
    return true;
+}
+
+//+------------------------------------------------------------------+
+//| [FEAT-P1-011] Helper: SessionHourToMin                           |
+//+------------------------------------------------------------------+
+int SessionHourToMin(const double hour)
+{
+   int m = (int)MathRound(hour * 60.0);
+   if(m < 0) m = 0;
+   if(m > 1439) m = 1439;
+   return m;
+}
+
+//+------------------------------------------------------------------+
+//| [FEAT-P1-011] Convert input hours -> SessionWindow[] (phút)       |
+//| Gọi 1 lần trong OnInit. Trả false nếu KHÔNG có window nào hợp lệ |
+//+------------------------------------------------------------------+
+bool ResolveSessionWindows()
+{
+   g_Windows[0].name = "LONDON_KZ";
+   g_Windows[0].enabled = UseLondonKZ;
+   g_Windows[1].name = "NY_KZ";
+   g_Windows[1].enabled = UseNewYorkKZ;
+   g_Windows[2].name = "CUSTOM";
+   g_Windows[2].enabled = UseCustomSession;
+
+   double starts[3] = {London_StartHour, NewYork_StartHour, Custom_StartHour};
+   double ends[3]   = {London_EndHour, NewYork_EndHour, Custom_EndHour};
+
+   int enabled_count = 0;
+   int shortest_window = 1440;
+
+   for(int i = 0; i < 3; i++)
+   {
+      if(!g_Windows[i].enabled) continue;
+
+      if(starts[i] < 0.0 || starts[i] >= 24.0 || ends[i] < 0.0 || ends[i] >= 24.0)
+      {
+         PrintFormat("[FEAT-P1-011] WARNING: %s hours out of bounds [0, 24). Clamping applied.", g_Windows[i].name);
+      }
+
+      int s_min = SessionHourToMin(starts[i]);
+      int e_min = SessionHourToMin(ends[i]);
+
+      if(Session_TimeBase == TIMEBASE_GMT)
+      {
+         s_min = (s_min + Session_GMT_Offset * 60 + 1440) % 1440;
+         e_min = (e_min + Session_GMT_Offset * 60 + 1440) % 1440;
+      }
+
+      g_Windows[i].start_min = s_min;
+      g_Windows[i].end_min   = e_min;
+
+      if(s_min == e_min)
+      {
+         PrintFormat("[FEAT-P1-011] WARNING: %s start == end. Disabling window.", g_Windows[i].name);
+         g_Windows[i].enabled = false;
+         continue;
+      }
+
+      int len = (e_min > s_min) ? (e_min - s_min) : (e_min - s_min + 1440);
+      if(len < shortest_window) shortest_window = len;
+
+      enabled_count++;
+   }
+
+   if(Session_NoEntryBeforeEndMin >= shortest_window && shortest_window != 1440)
+   {
+      PrintFormat("[FEAT-P1-011] WARNING: Session_NoEntryBeforeEndMin (%d) >= shortest window (%d). May block all entries.", Session_NoEntryBeforeEndMin, shortest_window);
+   }
+
+   PrintFormat("[FEAT-P1-011] Resolved Config | TimeBase: %s | Buffer: %d min | FriCutoff: %s (%.1f) | MonDelay: %s (%.1f)",
+               EnumToString(Session_TimeBase), Session_NoEntryBeforeEndMin,
+               UseFridayCutoff ? "ON" : "OFF", Friday_CutoffHour,
+               UseMondayDelay ? "ON" : "OFF", Monday_OpenHour);
+
+   for(int i=0; i<3; i++)
+   {
+      if(g_Windows[i].enabled)
+         PrintFormat("[FEAT-P1-011] - %s: %02d:%02d to %02d:%02d (server time)",
+                     g_Windows[i].name,
+                     g_Windows[i].start_min / 60, g_Windows[i].start_min % 60,
+                     g_Windows[i].end_min / 60, g_Windows[i].end_min % 60);
+   }
+
+   if(enabled_count == 0) return false;
+   return true;
+}
+
+//+------------------------------------------------------------------+
+//| [FEAT-P1-011] Kiểm tra thời điểm hiện tại có được entry mới không|
+//| reason: OUT-param mô tả lý do chặn (logging). "" nếu được phép.  |
+//+------------------------------------------------------------------+
+bool IsInTradeSession(string &reason)
+{
+   reason = "";
+   MqlDateTime dt;
+   TimeToStruct(TimeCurrent(), dt);
+   int cur_min = dt.hour * 60 + dt.min; // BỎ QUA dt.sec
+   int active_idx = -1;
+
+   // 1. Friday cutoff
+   if(UseFridayCutoff && dt.day_of_week == 5 && cur_min >= (int)MathRound(Friday_CutoffHour * 60.0))
+   {
+      reason = "FRIDAY_CUTOFF";
+   }
+   // 2. Monday delay
+   else if(UseMondayDelay && dt.day_of_week == 1 && cur_min < (int)MathRound(Monday_OpenHour * 60.0))
+   {
+      reason = "MONDAY_DELAY";
+   }
+   else
+   {
+      // 3. Kill-zone membership
+      bool in_any = false;
+      for(int i = 0; i < 3; i++)
+      {
+         if(!g_Windows[i].enabled) continue;
+         int s = g_Windows[i].start_min;
+         int e = g_Windows[i].end_min;
+         bool inside = (s < e) ? (cur_min >= s && cur_min < e) : (cur_min >= s || cur_min < e);
+         
+         if(inside)
+         {
+            in_any = true;
+            active_idx = i;
+            break;
+         }
+      }
+
+      if(!in_any)
+      {
+         reason = "OUTSIDE_KILLZONE";
+      }
+      else
+      {
+         // 4. End buffer
+         if(Session_NoEntryBeforeEndMin > 0)
+         {
+            int e = g_Windows[active_idx].end_min;
+            int min_to_end = (e - cur_min + 1440) % 1440;
+            if(min_to_end < Session_NoEntryBeforeEndMin)
+            {
+               reason = g_Windows[active_idx].name + "_END_BUFFER";
+            }
+         }
+      }
+   }
+
+   string current_state = (reason == "") ? g_Windows[active_idx].name : ("OFF:" + reason);
+
+   if(current_state != g_SessionState)
+   {
+      if(reason == "")
+         PrintFormat("[FEAT-P1-011] ENTER %s @ %02d:%02d server", g_Windows[active_idx].name, dt.hour, dt.min);
+      else
+         PrintFormat("[FEAT-P1-011] BLOCKED: %s @ %02d:%02d server", reason, dt.hour, dt.min);
+      g_SessionState = current_state;
+   }
+
+   return (reason == "");
 }
 
 
@@ -414,6 +627,14 @@ void OnTick()
 
    if(Spread > SpreadFilter) return;
 
+   // === [FEAT-P1-011] Session / Kill-zone gate ===
+   if(UseSessionFilter)
+   {
+      string sess_reason;
+      if(!IsInTradeSession(sess_reason)) return;   // log transition đã xử lý bên trong
+   }
+   // === end FEAT-P1-011 ===
+
    // === [FEAT-P1-010] HTF Bias update (cached per HTF bar) ===
    if(UseHTFBiasFilter)
    {
@@ -470,6 +691,19 @@ void OnTick()
       sl_price   = NormalizeDouble(choch.smart_sl - sl_buffer, Digits_val);
       double sl_dist  = entry - sl_price;
       if(sl_dist <= 0) return;
+
+      // === [FEAT-P0-012] Clamp SL theo STOPS_LEVEL / FREEZE_LEVEL ===
+      double min_stop = GetMinStopDistance();
+      if(sl_dist < min_stop)
+      {
+         double old_sl = sl_price;
+         sl_dist  = min_stop;
+         sl_price = NormalizeDouble(entry - sl_dist, Digits_val);
+         PrintFormat("[FEAT-P0-012] SL clamped: %.2f -> %.2f (min_stop=%.2f)",
+                     old_sl, sl_price, min_stop);
+      }
+      // === end FEAT-P0-012 ===
+
       double min_tp   = NormalizeDouble(entry + sl_dist * MinRR, Digits_val);
       tp_price        = MathMax(ob.top, min_tp);
       order_type      = ORDER_TYPE_BUY;
@@ -480,6 +714,19 @@ void OnTick()
       sl_price   = NormalizeDouble(choch.smart_sl + sl_buffer, Digits_val);
       double sl_dist  = sl_price - entry;
       if(sl_dist <= 0) return;
+
+      // === [FEAT-P0-012] Clamp SL theo STOPS_LEVEL / FREEZE_LEVEL ===
+      double min_stop = GetMinStopDistance();
+      if(sl_dist < min_stop)
+      {
+         double old_sl = sl_price;
+         sl_dist  = min_stop;
+         sl_price = NormalizeDouble(entry + sl_dist, Digits_val);
+         PrintFormat("[FEAT-P0-012] SL clamped: %.2f -> %.2f (min_stop=%.2f)",
+                     old_sl, sl_price, min_stop);
+      }
+      // === end FEAT-P0-012 ===
+
       double min_tp   = NormalizeDouble(entry - sl_dist * MinRR, Digits_val);
       tp_price        = MathMin(ob.bottom, min_tp);
       order_type      = ORDER_TYPE_SELL;
@@ -1355,12 +1602,55 @@ void ManagePosition()
             should_modify = true;
       }
 
+      // === [FEAT-P0-012] Trailing SL phải tôn trọng STOPS_LEVEL ===
+      if(should_modify)
+      {
+         double min_stop_t = GetMinStopDistance();
+         bool   sl_valid    = true;
+         if(pos_type == POSITION_TYPE_BUY)
+            sl_valid = (new_sl <= NormalizeDouble(Bid - min_stop_t, Digits_val));
+         else
+            sl_valid = (new_sl >= NormalizeDouble(Ask + min_stop_t, Digits_val));
+
+         if(!sl_valid)
+         {
+            if(!g_TrailClampLogged)
+            {
+               PrintFormat("[FEAT-P0-012] Trailing skip: new_sl=%.2f vi phạm min_stop=%.2f — thử lại tick sau",
+                           new_sl, min_stop_t);
+               g_TrailClampLogged = true;
+            }
+            return;   // skip lần modify này — KHÔNG đẩy SL lùi (giữ kỷ luật R-multiple)
+         }
+         g_TrailClampLogged = false;
+      }
+      // === end FEAT-P0-012 ===
+
       if(should_modify && MathAbs(new_sl - LastTrailSL) > Point_val)
       {
          if(Trade.PositionModify(ticket, new_sl, tp))
             LastTrailSL = new_sl;
       }
    }
+}
+
+//+------------------------------------------------------------------+
+//| [FEAT-P0-012] Khoảng cách tối thiểu hợp lệ từ giá thị trường     |
+//| tới SL/TP (đơn vị GIÁ). Đọc động mỗi lần gọi — broker có thể     |
+//| thay STOPS_LEVEL intraday. Bao gồm sàn động theo spread hiện tại |
+//+------------------------------------------------------------------+
+double GetMinStopDistance()
+{
+   long stops_pts  = SymbolInfoInteger(_Symbol, SYMBOL_TRADE_STOPS_LEVEL);
+   long freeze_pts = SymbolInfoInteger(_Symbol, SYMBOL_TRADE_FREEZE_LEVEL);
+   double static_min = MathMax((double)stops_pts, (double)freeze_pts) * Point_val;
+
+   double spread = 0;
+   MqlTick tick;
+   if(SymbolInfoTick(_Symbol, tick)) spread = tick.ask - tick.bid;   // fail → spread = 0 (fallback an toàn)
+   double dynamic_min = STOPS_SPREAD_MULT * spread;
+
+   return MathMax(static_min, dynamic_min) + STOPS_SAFETY_POINTS * Point_val;
 }
 
 //+------------------------------------------------------------------+
@@ -1459,4 +1749,12 @@ bool SafeOrderSend(const ENUM_ORDER_TYPE type, const double lot,
 //| [FEAT-P1-010] 2026-07-26: HTF Bias Filter (H4/D1), swing structure|
 //| (tái dùng IsPeak/IsTrough) + EMA, 4 chế độ đa khung, neutral policy,|
 //| cache bias theo nến HTF, gate hướng sau GetOB_H1 trong OnTick.   |
+//| [FEAT-P1-011] 2026-07-26: Session/Kill-zone Filter , London KZ + |
+//| NY KZ (default giờ server broker GMT+2/+3), custom window hỗ trợ |
+//| qua nửa đêm, Friday cutoff, Monday delay, end-buffer chặn entry  |
+//| cuối session, time base SERVER/GMT, log theo transition.         |
+//| [FEAT-P0-012] 2026-07-26: Stops Level Clamp — GetMinStopDistance()|
+//| đọc động STOPS_LEVEL/FREEZE_LEVEL + sàn 2x spread, clamp SL entry|
+//| (TP/RR/Lot tự tính lại trên sl_dist mới), guard skip trailing    |
+//| modify khi vi phạm min distance / vùng FREEZE. Hoàn thành debt P0.|
 //+------------------------------------------------------------------+
