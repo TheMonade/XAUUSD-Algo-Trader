@@ -1,16 +1,26 @@
 ```markdown
-# TRẠNG THÁI DỰ ÁN: XAU SMC TRADER BOT (MQL5)
+# TRẠNG THÁI DỰ ÁN: XAU TRADING BOT PLATFORM (MQL5)
 
-> **File:** `MEMORY.md` , Bộ nhớ dự án tĩnh. Cập nhật lần cuối: 2026-08-04 (rev 6, hoàn thành Stops Level Clamp [FEAT-P0-012] + đồng bộ lại cây hàm Mục 2.2 theo code thực tế).
+> **File:** `MEMORY.md` — Bộ nhớ dự án tĩnh. Cập nhật lần cuối: 2026-08-04 (rev 9 — tách ARCHIVE STRAT-001 ra file riêng `ARCHIVE_STRAT-001_SMC.md`; MEMORY.md chỉ còn platform + strategy ACTIVE).
 > **Lưu ý quan trọng:** Dự án này **KHÔNG phải Python**. Toàn bộ hệ thống là **Expert Advisor (EA) chạy native trên MetaTrader 5**, viết bằng **MQL5**.
-> **Tên file chính thức duy nhất:** `XAU_SMC_Trader.mq5` , mọi tham chiếu, chỉnh sửa, ghi đè PHẢI dùng đúng tên này.
+> **File ACTIVE duy nhất:** `XAU_Donchian_Trader.mq5` (sẽ tạo — xem Mục 2.2). File `XAU_SMC_Trader.mq5` **ĐÓNG BĂNG** — CẤM chỉnh sửa, chi tiết lưu trữ tại `ARCHIVE_STRAT-001_SMC.md`.
 
-## 1. Bối cảnh & Mục tiêu dự án
+## 1. Bối cảnh & Strategy Registry
 
-* **Mục tiêu:** Bot giao dịch tự động Vàng (XAUUSD) theo phương pháp **SMC (Smart Money Concepts)**, kết hợp đa khung thời gian (Multi-Timeframe).
-* **Chiến lược cốt lõi:** `HTF Bias (H4/D1) → H1 Order Block (POI) → chờ giá quay về vùng OB → M5 CHoCH (Change of Character) xác nhận đảo chiều → M5 FVG (Fair Value Gap) hội tụ → vào lệnh`.
-* **Triết lý quản trị:** Rủi ro cố định theo % balance, quản lý lệnh theo **R-multiple** (bội số rủi ro ban đầu), có cơ chế chống overtrade và "né" vùng giá vừa gây thua lỗ.
-* **Phiên bản hiện tại:** `XAU_SMC_Trader.mq5` , bản đã tích hợp FEAT-P1-008 (Liquidity Sweep), FEAT-P1-009 (FVG Filter), FEAT-P1-010 (HTF Bias Filter), FEAT-P1-011 (Session Filter) và FEAT-P0-012 (Stops Level Clamp). Không còn nợ kỹ thuật P0 nào đang mở.
+* **Mục tiêu platform:** Xây dựng hạ tầng EA giao dịch XAUUSD tái sử dụng được (execution an toàn, risk manager theo R-multiple, bộ lọc bối cảnh), trên đó thay thế strategy lõi (signal source) theo quy trình kiểm chứng chặt (Mục 6).
+* **Kết luận nền tảng đã kiểm chứng:** XAUUSD là tài sản **trend mạnh, quét thanh khoản liên tục** — mean-reversion SL hẹp khung nhỏ bị phạt nặng; trend-following SL rộng theo ATR khung lớn là hướng phù hợp (bằng chứng: `ARCHIVE_STRAT-001_SMC.md` Mục A2).
+* **Triết lý quản trị (xuyên mọi strategy):** Rủi ro cố định theo % balance, quản lý lệnh theo **R-multiple**, chống overtrade, execution tuân thủ rule broker.
+
+### 1.1. Strategy Registry (nguồn sự thật duy nhất về strategy)
+
+| ID | Tên | Trạng thái | File code | File archive |
+|---|---|---|---|---|
+| STRAT-001 | SMC: H1 OB + M5 CHoCH (+Sweep/FVG/Bias/Session) | **CLOSED — FAILED** | `XAU_SMC_Trader.mq5` (đóng băng) | `ARCHIVE_STRAT-001_SMC.md` |
+| STRAT-002 | Donchian Breakout H1 + ATR Chandelier Trailing | **ACTIVE — giai đoạn spec** | `XAU_Donchian_Trader.mq5` (chưa tạo) | — |
+
+* **Quy tắc:** chỉ 1 strategy ACTIVE tại 1 thời điểm. Strategy CLOSED **không bao giờ được "mở lại"** trên cùng bộ dữ liệu (M5/M7, Mục 6.3).
+* **Quy ước archive:** khi CLOSED một strategy → tạo `ARCHIVE_STRAT-00X_<Tên>.md` theo mẫu A1–A7 của `ARCHIVE_STRAT-001_SMC.md`, chuyển file code sang đóng băng, cập nhật Registry. MEMORY.md chỉ giữ 1 dòng con trỏ trong Registry, KHÔNG nhân bản chi tiết.
+* **Failure budget (M5):** T1/T5 đã tiêu tốn = 5 vòng feature SMC + 1 vòng xác nhận âm bản. STRAT-002 là strategy thứ 2 trên cùng data → **chỉ được dùng T1/T5 cho Development**; Validation bắt buộc theo Mục 4.2.
 
 ## 2. Cấu trúc hệ thống
 
@@ -19,10 +29,10 @@
 | Ngôn ngữ | MQL5 (MetaQuotes Language 5), `#property strict` |
 | Nền tảng | MetaTrader 5 (EA event-driven: `OnInit`, `OnTick`, `OnTradeTransaction`, `OnDeinit`) |
 | Thư viện chuẩn | `Trade\Trade.mqh` (CTrade), `Trade\PositionInfo.mqh` (CPositionInfo), `Indicators\Indicators.mqh` |
-| Indicator | ATR H1, ATR M5, ATR H4/D1, EMA H4/D1 qua handle `iATR`/`iMA` + `CopyBuffer` |
+| Indicator | ATR H1 (SL/trailing), ATR H4/D1 + EMA H4/D1 (HTF Bias — tạo handle có điều kiện) qua `iATR`/`iMA` + `CopyBuffer` |
 | Symbol mục tiêu | XAUUSD (chart-attached `_Symbol`) |
-| Kiến trúc | **Monolith 1 file** , toàn bộ logic nằm trong 1 file `.mq5` |
-| Execution Mode | Tự động dò theo bitmask broker (ResolveFillingMode), bọc qua SafeOrderSend với cơ chế fallback FOK -> IOC -> RETURN khi gặp lỗi 10030|
+| Kiến trúc | **Monolith 1 file per strategy.** Module hóa `.mqh` HOÃN tới khi STRAT-002 pass Development (tránh confound: refactor đồng thời với đổi strategy) |
+| Execution Mode | Tự động dò theo bitmask broker (ResolveFillingMode), bọc qua SafeOrderSend với fallback FOK -> IOC -> RETURN khi gặp lỗi 10030 [FEAT-P0-001] |
 
 ### 2.1. Quy tắc Execution Mode (BẮT BUỘC khi refactor)
 
@@ -41,253 +51,209 @@ ENUM_ORDER_TYPE_FILLING GetSupportedFilling()
 ```
 
 * Thứ tự ưu tiên: **FOK → IOC → RETURN** (tự dò theo bitmask của broker).
-* Kết hợp `Trade.SetDeviationInPoints(30)` để kiểm soát slippage; cân nhắc tăng deviation động theo ATR trong phiên tin mạnh, hoặc chặn entry ±X phút quanh tin (news filter, chưa có, xem Mục 5).
+* Kết hợp `Trade.SetDeviationInPoints(30)` để kiểm soát slippage; cân nhắc chặn entry ±X phút quanh tin (news filter, chưa có, xem Mục 5).
 
-### 2.2. Cấu trúc file & vai trò (đã thống nhất tên file)
+### 2.2. Cấu trúc file & vai trò
 
 ```
 project_root/
-├── MEMORY.md                         # File này, bộ nhớ dự án
-└── XAU_SMC_Trader.mq5                # EA DUY NHẤT, tên chính thức, không đổi/ghi đè nhầm
-    ├── [Inputs]                      # 11 nhóm tham số cấu hình (TRADE/OB/SL BUFFER/CHoCH/SWEEP/FVG/HTF BIAS/SESSION/POSITION MGMT/OVERTRADE/MISC)
-    ├── [State toàn cục]              # Ticket, InitialVolume, HTFBiasInfo, LossZones, SessionState, g_TrailClampLogged (FEAT-P0-012)...
-    ├── OnInit/OnDeinit               # Khởi tạo CTrade, indicator handles / giải phóng handle
-    ├── OnTick                        # Vòng lặp chính: filter → session → HTF Bias → tìm OB → gate hướng → tìm CHoCH → FVG → clamp SL → đặt lệnh
-    ├── OnTradeTransaction            # Bắt sự kiện đóng deal → đếm chuỗi thua, cooldown
-    ├── ResolveSessionWindows()       # [FEAT-P1-011] Khởi tạo và validate các session window
-    ├── IsInTradeSession()            # [FEAT-P1-011] Gate chính lọc thời gian giao dịch
-    ├── SessionHourToMin()            # [FEAT-P1-011] Helper quy đổi giờ sang phút
-    ├── ComputeTFBias()               # [FEAT-P1-010] Tính và cache bias cho từng khung H4/D1
-    ├── UpdateHTFBias()               # [FEAT-P1-010] Orchestrator tổng hợp bias đa khung
-    ├── CheckHTFBiasDirection()       # [FEAT-P1-010] Gate chặn entry ngược cấu trúc khung lớn
-    ├── GetOB_H1()                    # Nhận diện Order Block trên H1
-    ├── DetectLiquiditySweep_M5()     # Nhận diện quét thanh khoản (FEAT-P1-008)
-    ├── DetectCHoCH_M5()              # Nhận diện CHoCH trên M5 + tính Smart SL
-    ├── DetectFVG_M5()                # [FEAT-P1-009] Nhận diện Fair Value Gap trên M5
-    ├── CheckFVGConfluence()          # [FEAT-P1-009] Orchestrator kiểm tra hội tụ FVG sau CHoCH
-    ├── IsPeak()/IsTrough()           # Swing high/low theo distance + prominence (kiểu scipy)
-    ├── HasOpenPosition()/GetOpenPosition()  # Kiểm tra & lấy dữ liệu lệnh đang mở theo Symbol+Magic (đã có sẵn trong code, bổ sung vào cây lần này)
-    ├── ManagePosition()              # Partial close + Trailing stop theo R, guard clamp STOPS_LEVEL trước PositionModify (FEAT-P0-012)
-    ├── GetMinStopDistance()          # [FEAT-P0-012] Khoảng cách tối thiểu hợp lệ SL/TP, đọc động STOPS_LEVEL/FREEZE_LEVEL + sàn 2×spread
-    ├── CalcLotSize()                 # Position sizing theo RiskPercent
-    ├── ResolveFillingMode()/FallbackFillingMode()/SafeOrderSend()  # [FEAT-P0-001] Auto filling mode + retry gửi lệnh (đã có sẵn trong code, bổ sung vào cây lần này)
-    ├── IsZoneBlocked()/RegisterLossZone()  # Blacklist vùng OB gây thua (ring buffer 10 slot)
-    └── IsMarketTradeable(), InCooldown(), UpdateDailyCounterIfNewDay()  # Filter phụ trợ
-
+├── MEMORY.md                         # File này — bộ nhớ platform (chỉ ACTIVE + quy trình)
+├── ARCHIVE_STRAT-001_SMC.md          # Archive STRAT-001 (đóng băng, chi tiết logic + bằng chứng)
+├── XAU_SMC_Trader.mq5                # ĐÓNG BĂNG. CẤM sửa. Kho code nguồn để COPY module R1–R3
+└── XAU_Donchian_Trader.mq5           # [SẼ TẠO] File ACTIVE duy nhất — STRAT-002
+    ├── [Phần copy nguyên xi từ archive code]  # theo bản đồ Mục 2.3
+    │     ├── SafeOrderSend()/ResolveFillingMode()/FallbackFillingMode()  # [P0-001]
+    │     ├── CalcLotSize(), IsMarketTradeable()
+    │     ├── ManagePosition() (partial + R-trailing)  # + thêm mode Chandelier (Mục 3.2)
+    │     ├── Daily cap / loss-streak cooldown / OnTradeTransaction
+    │     ├── HTF Bias: ComputeTFBias()/UpdateHTFBias()/CheckHTFBiasDirection()  # [P1-010]
+    │     ├── Session: ResolveSessionWindows()/IsInTradeSession()/SessionHourToMin()  # [P1-011 — merge lần đầu vào file này]
+    │     ├── GetMinStopDistance() + clamp entry/trailing  # [P0-012 — merge lần đầu vào file này]
+    │     └── IsPeak()/IsTrough() (phục vụ HTF Bias)
+    └── [Phần viết mới — Donchian core]   # Mục 3: GetDonchianSignal() hoặc tương đương
 ```
 
-> **Quy ước đặt tên phiên bản:** Nếu tạo bản mới, đặt `XAU_SMC_Trader_v{N}.mq5` và cập nhật lại mục này + Mục 1. Tuyệt đối không tồn tại song song 2 tên file mơ hồ.
+* **Quy ước tên file:** mỗi strategy = 1 file riêng, tên `XAU_<StrategyName>_Trader.mq5`; archive = `ARCHIVE_STRAT-00X_<Tên>.md`. File ACTIVE duy nhất ghi tại Mục 1. File CLOSED đóng băng tại Registry + Mục 2.2 đồng thời.
+* **Cấm:** chỉnh sửa file đóng băng; tồn tại 2 file ACTIVE; copy module mà không ghi nguồn trong change-log file mới.
 
-## 3. Chi tiết logic giao dịch (SMC Core)
+### 2.3. Bản đồ tái sử dụng module (SMC archive → Donchian)
 
-### 3.1. HTF Bias Filter H4/D1, `UpdateHTFBias()` & `CheckHTFBiasDirection()`
+| Module (nguồn: `XAU_SMC_Trader.mq5`) | Nhóm | Hành động cho STRAT-002 |
+|---|---|---|
+| `SafeOrderSend`, `ResolveFillingMode`, `FallbackFillingMode` | R1 |  Copy nguyên xi |
+| `CalcLotSize`, `IsMarketTradeable` | R1 |  Copy nguyên xi |
+| Stops Level Clamp [P0-012] (spec sẵn) | R1 |  Merge lần đầu vào file mới — **P0 bắt buộc** |
+| `ManagePosition` (partial + R-trailing) | R2 |  Copy + **thêm mode Chandelier ATR trailing** (Mục 3.2) |
+| Daily cap, loss-streak cooldown, `OnTradeTransaction` | R2 |  Copy nguyên xi |
+| Loss-zone blacklist | R2 |  Copy + A/B test ON/OFF — Donchian không có "OB zone"; zone = breakout range (giả định mới, không mặc định tin) |
+| HTF Bias Filter [P1-010] | R3 |  Copy nguyên xi — trend context filter |
+| Session Filter [P1-011] (spec sẵn) | R3 |  Merge lần đầu vào file mới |
+| `IsPeak`/`IsTrough`, ATR/EMA handles | R4 |  Copy (phục vụ HTF Bias; ATR H1 cho SL/trailing) |
+| `GetOB_H1`, `DetectCHoCH_M5`, Sweep, FVG | R5 |  Bỏ — thay bằng Donchian core (Mục 3) |
 
-* **Phương pháp định hướng:** Cấu trúc Swing (HH/HL, LH/LL) hoặc Giá so với EMA, hoặc yêu cầu đồng thuận cả hai.
-* **Chế độ đa khung:** H4 only, D1 only, H4 + D1 (đồng thuận), hoặc H4 chính (D1 dự phòng khi H4 trung lập).
-* **Cơ chế Cache:** Chỉ tính toán lại khi có nến mới trên khung thời gian HTF tương ứng, tiết kiệm tài nguyên trên nến M5.
-* **Neutral Policy:** Quyết định hành vi khi cấu trúc không rõ ràng (cho phép giao dịch 2 chiều hoặc chặn tất cả).
+## 3. STRAT-002: Donchian Breakout H1 + ATR Trailing (Thiết kế chốt)
 
-### 3.2. Order Block H1, `GetOB_H1()`
+> Spec chi tiết sẽ viết riêng (FEAT-S2-001). Mục này chốt các quyết định thiết kế cốt lõi — AI Coder không được tự suy diễn khác đi.
 
-* Quét `OB_Lookback = 100` nến H1 (từ nến index 1, bỏ nến đang chạy).
-* **Bullish OB:** Tìm nến tăng có `body > ATR(15) × 1.5` (displacement candle) → nến ngay trước đó (`i+1`) phải là **nến giảm** → vùng OB = `[low, high]` của nến giảm đó.
-* **Bearish OB:** Đối xứng, nến giảm mạnh, nến trước đó là nến tăng.
-* **Kiểm tra mitigation:** Quét từ nến OB về hiện tại; nếu có `close` phá xuyên đáy OB (bullish) / đỉnh OB (bearish) → OB **mất hiệu lực**.
-* Trả về OB **gần nhất còn hiệu lực** (return ngay khi tìm thấy đầu tiên).
+### 3.1. Logic entry
 
-### 3.3. CHoCH M5, `DetectCHoCH_M5()`
+* **Khung:** Entry/exit trên **H1** (bar-close). KHÔNG dùng M5 (bài học A5.1 — M5 quá nhỏ cho XAU).
+* **Setup BUY:** `close[1]` H1 phá lên trên Donchian High của `DC_Period = 20` nến H1 (tính trên nến đã đóng, không gồm nến đang chạy). SELL đối xứng với Donchian Low.
+* **Fresh-break trigger:** `close[2]` chưa phá (chống re-trigger).
+* **Context filter (bắt buộc):** chỉ vào lệnh **cùng hướng HTF Bias** (module P1-010, default `HTF_TF_H4_ONLY` + method SWING). Neutral → `NEUTRAL_ALLOW_ALL` (A/B test sau).
+* **Session filter:** chỉ entry trong London/NY kill-zone (module P1-011). A/B test ON/OFF.
+* **Một lệnh tại một thời điểm** (giữ cơ chế `HasOpenPosition`).
 
-Với OB Bullish (Bearish làm đối xứng):
+### 3.2. SL / TP / Exit
 
-1. **Touch check:** Trong 100 nến M5, phải có ít nhất 1 nến có `low` chạm vùng OB (`bottom ≤ low ≤ top`).
-2. **Tìm swing high gần nhất:** `IsPeak()`, cao hơn `Peak_Distance = 5` nến 2 bên **và** prominence `≥ ATR(M5) × 0.5`.
-3. **Trigger CHoCH:** `close[1]` phá lên swing high và `close[2]` còn nằm dưới, breakout mới xảy ra (chống re-trigger).
-4. **Sweep filter:** Xác nhận nến có độ xuyên từ `0.05` đến `2.0` ATR qua `ref_level`. Khóa lệnh nếu có breakdown đóng nến hoàn toàn qua cực.
-5. **Smart SL:** Lấy `sweep_extreme` làm SL hoặc fallback về `lowest low` từ swing peak đến hiện tại, SL phải nằm trong/dưới OB (`lowest_low ≤ ob.top`).
+* **SL khởi tạo:** `entry ∓ DC_SL_ATR_Mult × ATR(H1)`, default `DC_SL_ATR_Mult = 2.5`.
+* **KHÔNG TP cố định.** Thoát bằng **Chandelier trailing**: SL = đỉnh cao nhất kể từ entry ∓ `DC_Trail_ATR_Mult × ATR(H1)` (BUY; SELL đối xứng), default `DC_Trail_ATR_Mult = 3.0`. SL chỉ dịch theo hướng có lợi, KHÔNG BAO GIỜ nới lỏng.
+* **Partial close:** giữ cơ chế partial 66% tại 1R — A/B test riêng vì chandelier đã là cơ chế chốt lời.
+* **Stops Level Clamp [P0-012]:** bắt buộc cho cả SL khởi tạo lẫn mọi lần modify trailing.
+* **Lot:** theo `RiskPercent = 1%` trên SL sau clamp (`CalcLotSize` nguyên xi).
+* **KHÔNG dùng MinRR filter** (không TP cố định) — loại bỏ 1 tham số (M6).
 
-### 3.4. Vào lệnh & Risk (trong `OnTick`)
+### 3.3. Tham số tự do (chỉ 3 — chống O1)
 
-* **Chạy theo nến M5 mới** (bar-close logic), không xử lý mỗi tick khi chưa có lệnh.
-* Filter trước entry: thị trường mở → không cooldown → chưa vượt `MaxTradesPerDay = 4` → `Spread ≤ 80 points` → `IsInTradeSession` hợp lệ → Hướng đánh khớp HTF Bias → OB không nằm trong blacklist loss-zone.
-* **Hội tụ FVG (Phase 1):** Bắt buộc có FVG chưa bị mitigate sau CHoCH, cùng hướng với OB.
-* **SL** = `smart_sl ± buffer`, buffer = `ATR(M5) × 0.15` (động).
-* **TP** = `max(ob.top, entry + SL_dist × MinRR)` cho BUY (mirror cho SELL). Loại lệnh nếu RR thực tế `< MinRR = 1.5`.
-* **Lot size** = `(Balance × 1%) / (SL_points × value_per_point)`, floor theo `lot_step`, clamp min/max.
+| Input | Default | Robustness range bắt buộc |
+|---|---|---|
+| `DC_Period` | 20 | {15, 20, 30, 40} |
+| `DC_SL_ATR_Mult` | 2.5 | {2.0, 2.5, 3.0} |
+| `DC_Trail_ATR_Mult` | 3.0 | {2.5, 3.0, 4.0} |
 
-#### 3.4.1. Clamp SL theo STOPS_LEVEL — ĐÃ HOÀN THÀNH [FEAT-P0-012] (2026-07-26)
+Kết luận chỉ hợp lệ nếu **không đảo chiều** trong toàn bộ lưới robustness trên (Mục 6.2).
 
-Khi giãn spread (news/rollover), khoảng cách entry → Smart SL trên M5 có thể **nhỏ hơn khoảng dừng tối thiểu** sàn cho phép → lệnh bị reject `Invalid Stops` (retcode 10016). Đã implement dưới dạng bug-fix, KHÔNG thêm input mới (2 hằng số kỹ thuật qua `#define`).
+### 3.4. Kỳ vọng & tiêu chí pass Development
 
-**Hàm dùng chung `GetMinStopDistance()`** (thuần, không log, đọc động mỗi lần gọi — không cache STOPS_LEVEL/FREEZE_LEVEL/spread vì broker có thể đổi intraday):
+* Tần suất: 5–15 lệnh/tháng → ≥ 100 lệnh/7 năm (đủ mẫu, Mục 6.2).
+* Hình thái kỳ vọng: winrate 35–45%, payoff trung bình ≥ 2.5R, equity có các pha flat dài (đặc trưng trend-following — **không** đánh giá bằng "đường equity mượt").
+* **Pass Development khi:** expectancy > 0 sau chi phí trên T1/T5 **và** lưới robustness không đảo chiều **và** max DD ≤ 25%.
 
-```mql5
-#define STOPS_SAFETY_POINTS   2     // buffer chống giá dịch giữa lúc tính và lúc lệnh tới server
-#define STOPS_SPREAD_MULT     2.0   // sàn động = mult * spread hiện tại (khi broker báo STOPS_LEVEL=0)
+## 4. Luồng dữ liệu & Data Governance
 
-double GetMinStopDistance()
-{
-   long stops_pts  = SymbolInfoInteger(_Symbol, SYMBOL_TRADE_STOPS_LEVEL);
-   long freeze_pts = SymbolInfoInteger(_Symbol, SYMBOL_TRADE_FREEZE_LEVEL);
-   double static_min  = MathMax((double)stops_pts, (double)freeze_pts) * Point_val;
-
-   double spread = 0;
-   MqlTick tick;
-   if(SymbolInfoTick(_Symbol, tick)) spread = tick.ask - tick.bid;
-   double dynamic_min = STOPS_SPREAD_MULT * spread;
-
-   return MathMax(static_min, dynamic_min) + STOPS_SAFETY_POINTS * Point_val;
-}
-```
-
-* **Entry (`OnTick`):** code tính `sl_dist` theo **2 nhánh riêng biệt** (BUY: `entry - sl_price`; SELL: `sl_price - entry`) — không phải 1 khối chung dùng `ob.ob_type` như bản nháp ban đầu giả định. Trong mỗi nhánh, ngay sau `if(sl_dist <= 0) return;`: nếu `sl_dist < GetMinStopDistance()` thì set `sl_dist = min_stop`, tính lại `sl_price` theo đúng hướng lệnh, `NormalizeDouble(..., Digits_val)`, log 1 dòng `[FEAT-P0-012] SL clamped: ...`. Khối `min_tp`/`tp_price`/`sl_points`/`CalcLotSize` phía dưới đọc lại `sl_dist`/`sl_price` nên tự động dùng giá trị SAU clamp — nếu RR sau clamp `< MinRR` → RR-check sẵn có (`actual_rr < MinRR`) tự hủy setup, không cần code thêm.
-* **Trailing (`ManagePosition`):** trong block `if(profit_R >= TrailingStartR)`, sau khi tính `new_sl` (cả 2 nhánh BUY/SELL) và TRƯỚC điều kiện cải thiện (`buffer_price`/`should_modify`): guard kiểm tra `new_sl` có cách `Bid`/`Ask` hiện tại `≥ GetMinStopDistance()` không. Vi phạm → `return` (skip modify lần này, KHÔNG đẩy SL lùi — giữ kỷ luật R-multiple). Log skip chống spam qua flag global `g_TrailClampLogged` (chỉ log lần đầu của chuỗi vi phạm liên tiếp, reset khi hết vi phạm).
-* Entry = **clamp** (nới SL ra + tính lại TP/RR/Lot); trailing = **skip** (không nới SL) — hành vi khác nhau có chủ đích.
-
-### 3.5. Quản lý lệnh, `ManagePosition()`
-
-* **Partial close:** Lãi `≥ 1.0R` → đóng `66%` volume (kiểm tra `lot_min`/`lot_step`).
-* **Trailing stop:** Kích hoạt từ `1.0R`, SL trail cách giá `1.0R`, chỉ modify khi cải thiện `> 0.1R` (chống spam modify). Phải tuân thủ clamp STOPS_LEVEL ở 3.4.1.
-
-### 3.6. Chống Overtrade & Loss-Zone Blacklist
-
-* **Daily cap:** Tối đa 4 lệnh/ngày (reset theo ngày lịch).
-* **Loss streak:** 2 lệnh thua liên tiếp → cooldown 12 nến H1 (profit tính gồm swap + commission trong `OnTradeTransaction`).
-* **Loss zones:** OB gây thua ghi vào ring buffer 10 slot, block re-entry 24 nến H1, proximity = `ATR(H1) × 1.0`.
-
-## 4. Luồng dữ liệu & Trạng thái hoàn thành
-
-### Luồng dữ liệu chính
+### 4.1. Luồng dữ liệu chính (STRAT-002)
 
 ```
-Tick → [Có position?] ─Yes→ ManagePosition (Partial/Trailing + clamp StopsLevel)
+Tick → [Có position?] ─Yes→ ManagePosition (Partial + Chandelier trailing + clamp StopsLevel)
         │No
-        └→ New M5 bar? → Filters (cooldown/daily/spread)
-             → IsInTradeSession (Session/Kill-zone filter)
-             → UpdateHTFBias (Cache theo nến H4/D1)
-             → GetOB_H1 (POI) → CheckHTFBiasDirection (Gate chặn ngược trend)
-             → IsZoneBlocked → DetectCHoCH_M5 (trigger + Smart SL)
-             → CheckFVGConfluence (FVG Filter)
-             → Clamp SL theo STOPS_LEVEL → Tính lại TP/RR → CalcLotSize
-             → Trade.Buy/Sell (filling mode tự dò theo broker)
-             → Lưu state (zone, initial risk, ticket)
+        └→ New H1 bar? → Filters (tradeable/cooldown/daily/spread)
+             → IsInTradeSession (P1-011)
+             → UpdateHTFBias (cache theo nến H4/D1)
+             → Donchian fresh-break check (Mục 3.1) + bias direction gate
+             → SL = 2.5×ATR(H1) → Clamp STOPS_LEVEL (P0-012) → CalcLotSize
+             → SafeOrderSend (filling tự dò)
+             → Lưu state (initial risk, ticket, highest-since-entry)
 
-Deal closed → OnTradeTransaction → cập nhật loss streak / loss zone / reset state
+Deal closed → OnTradeTransaction → cập nhật loss streak / reset state
 
 ```
 
-### Trạng thái module
+### 4.2. Data Governance (thay thế M1 cũ — vì data lịch sử đã cạn)
 
-* [x] **Data Access**, CopyBuffer/CopyHigh/Low/Open/Close, ATR handles (có check lỗi)
-* [x] **HTF Bias Filter (H4/D1)**, (FEAT-P1-010, hoàn thành filter 4 mode + logic Swing/EMA)
-* [x] **Session/Kill-zone Filter**, (FEAT-P1-011, London/NY KZ, custom window, Friday cutoff, Monday delay)
-* [x] **Order Block Detection (H1)**, hoàn thành, có mitigation check
-* [x] **CHoCH Detection (M5)**, hoàn thành, peak/prominence + fresh-break trigger
-* [x] **Risk Management**, % risk sizing, ATR-based SL buffer, MinRR filter
-* [x] **Position Management**, Partial close + R-based trailing
-* [x] **Overtrade Control**, daily cap, loss-streak cooldown, loss-zone blacklist
-* [x] **Execution**, CTrade với Magic, deviation 30
-* [x] **Auto Filling Mode Detection**, Hoàn thành [FEAT-P0-001]
-* [x] **Stops Level Clamp**, hoàn thành [FEAT-P0-012] 2026-07-26 — `GetMinStopDistance()` + clamp entry (2 nhánh BUY/SELL) + guard skip trailing (xem 3.4.1)
-* [x] **Liquidity Sweep Detection**, (FEAT-P1-008)
-* [x] **FVG (Fair Value Gap)**, (FEAT-P1-009, Phase 1: Filter mode)
-* [ ] **News Filter**, chưa có (liên quan trực tiếp slippage/spread XAU)
-* [ ] **Logging/Telemetry**, chỉ 1 `Print` khi init fail
-* [ ] **State Persistence**, loss zones / counters mất khi restart EA
-* [ ] **Unit Test / Backtest harness tự động**, chưa có
+| Vùng | Khoảng | Trạng thái |
+|---|---|---|
+| Development | 2019.07 – 2026.07 (T1/T5 cũ) | **EXHAUSTED cho validation** — đã nhìn thấy bởi 5 vòng feature + 1 xác nhận âm bản SMC. Chỉ còn dùng cho Development của STRAT-002 |
+| Validation | Chưa có | Tạo theo kế hoạch bên dưới |
+| Final | Chưa có | Chỉ chạy đúng 1 lần trước live |
 
-## 5. Định hướng nâng cấp / Refactor tiếp theo
+**Kế hoạch Validation cho STRAT-002 (bắt buộc), gồm ÍT NHẤT 2 trong 3:**
 
-### Ưu tiên khẩn cấp (P0, lỗi execution thực chiến) — ĐÃ XỬ LÝ HẾT
+1. **Forward test demo** tối thiểu 3 tháng trên tài khoản demo cùng broker (dữ liệu hoàn toàn mới).
+2. **Cross-broker data:** backtest trên dữ liệu broker khác (feed khác = gần-như-dữ-liệu-mới; khác cấu trúc spread/swap).
+3. **Cross-symbol sanity (M4):** chạy EURUSD/GBPUSD — không được vỡ hoàn toàn.
 
-* ~~Auto-detect Filling Mode~~ — hoàn thành [FEAT-P0-001] (chi tiết 2.1).
-* ~~Stops Level Clamp~~ — hoàn thành [FEAT-P0-012] 2026-07-26 (chi tiết 3.4.1).
+* **Ngưỡng pass Validation:** theo Mục 6.2 (≥ 50% expectancy in-sample, DD ≤ 1.5×, đủ mẫu).
+* **Cấm:** tune tham số Donchian trên bất kỳ dữ liệu nào thuộc Validation.
 
-Không còn nợ kỹ thuật P0 nào đang mở tại thời điểm cập nhật này (2026-08-04).
+## 5. Trạng thái module & Định hướng tiếp theo
 
-### Ưu tiên cao (P1)
+### Trạng thái module Platform
 
-1. **News filter:** chặn entry ±X phút quanh tin đỏ (NFP, CPI, FOMC), XAU giãn spread mạnh nhất tại các mốc này.
-2. **Module hóa:** tách `SMC_OrderBlock.mqh`, `SMC_CHoCH.mqh`, `RiskManager.mqh`, `TradeManager.mqh`.
+* [x] **Auto Filling Mode Detection** — [FEAT-P0-001], đã kiểm chứng trong file SMC
+* [x] **Risk Management theo R** — partial/trailing/cooldown, đã kiểm chứng
+* [x] **HTF Bias Filter** — [FEAT-P1-010], hoàn thành, tái dùng cho STRAT-002
+* [ ] **Stops Level Clamp** — [FEAT-P0-012], spec sẵn → **merge vào file STRAT-002 (P0)**
+* [ ] **Session/Kill-zone Filter** — [FEAT-P1-011], spec sẵn → merge vào file STRAT-002
+* [ ] **Donchian Core** — FEAT-S2-001, chưa spec chi tiết (thiết kế chốt Mục 3)
+* [ ] **Chandelier Trailing mode** — thêm vào `ManagePosition`, chưa spec
+* [ ] **Loss-zone cho Donchian** — copy sẵn từ archive code, phải A/B test ON/OFF (zone = breakout range là giả định chưa kiểm chứng)
+* [ ] **News Filter** — chưa có; **độ ưu tiên tăng** vì breakout nhạy tin hơn SMC
+* [ ] **Logging/Telemetry, State Persistence, Test harness** — debt giữ nguyên
 
-### Ưu tiên trung/thấp (P2)
+### Roadmap
 
-3. **Time-based exit:** Đóng lệnh cuối phiên giao dịch.
-4. **Logging chuẩn:** log mọi quyết định (OB found, CHoCH trigger, lý do reject, mã retcode lệnh fail) ra file/Journal.
-5. **Breakeven step riêng** trước trailing (hiện trailing start = partial trigger = 1R).
-6. **Multi-symbol support:** bỏ phụ thuộc `_Symbol`.
+**P0 (làm ngay, theo thứ tự):**
+1. Viết spec chi tiết **FEAT-S2-001** (Donchian core + Chandelier trailing) theo khung Mục 3.
+2. Tạo `XAU_Donchian_Trader.mq5`: copy R1–R3 theo bản đồ 2.3 + merge P0-012 + merge P1-011 + Donchian core. **Cấm sửa file SMC.**
+3. Regression: compile 0 error/0 warning; chạy T1/T5; chạy lưới robustness 3 tham số (Mục 3.3).
 
+**P1:**
+4. Đánh giá Development theo tiêu chí 3.4 → quyết định GO/NO-GO.
+5. Nếu GO → Validation theo 4.2 (forward demo + cross-broker).
+6. News filter (độ nhạy tăng với breakout strategy).
 
-## 6. Quy chuẩn Code (Code Conventions)
+**P2:**
+7. Module hóa `.mqh` + Signal Contract — **chỉ làm sau khi STRAT-002 pass Development**.
+8. Phương án dự phòng nếu STRAT-002 fail: EMA Pullback (B) hoặc Session ORB (C) — phân tích lựa chọn xem `ARCHIVE_STRAT-001_SMC.md` Mục A6. **Lưu ý failure budget (M5): nếu STRAT-002 fail trên T1/T5, strategy thứ 3 PHẢI có dữ liệu mới.**
+
+## 6. Quy chuẩn Code, Quản trị Overfit & Tái sử dụng
+
+### 6.1. Quy chuẩn Code (Code Conventions)
 
 * MQL5 `#property strict`; mọi array phải `ArraySetAsSeries(arr, true)` trước khi Copy.
 * Indicator dùng **handle** (`iATR` + `CopyBuffer`), release trong `OnDeinit`.
-* Mọi lệnh gửi qua `CTrade` với `MagicNumber = 202405`; mọi filter position check cả `Symbol` + `Magic`.
+* Mọi lệnh gửi qua `CTrade` với MagicNumber riêng của từng strategy (STRAT-002 dùng Magic mới, KHÔNG dùng lại 202405); mọi filter position check cả `Symbol` + `Magic`.
 * **Execution an toàn cho XAUUSD (BẮT BUỘC):**
-* KHÔNG hard-code filling mode, luôn dò `SymbolInfoInteger(_Symbol, SYMBOL_FILLING_MODE)` rồi mới `Trade.SetTypeFilling()` (ưu tiên FOK → IOC → RETURN).
-* MỌI giá SL/TP trước khi gửi/modify phải thỏa: khoảng cách tới giá thị trường `≥ max(SYMBOL_TRADE_STOPS_LEVEL, SYMBOL_TRADE_FREEZE_LEVEL) × _Point`.
-* Sau khi clamp SL → tính lại TP, RR, lot trên khoảng SL mới; RR sau clamp `< MinRR` → hủy setup.
+* KHÔNG hard-code filling mode, luôn dò `SymbolInfoInteger(_Symbol, SYMBOL_FILLING_MODE)` rồi mới `Trade.SetTypeFilling()` (FOK → IOC → RETURN).
+* MỌI giá SL/TP trước khi gửi/modify phải thỏa: khoảng cách tới giá thị trường `≥ GetMinStopDistance()` (đọc động: STOPS_LEVEL/FREEZE_LEVEL + sàn 2×spread + safety 2 points).
+* Sau khi clamp SL → tính lại các đại lượng phụ thuộc trên khoảng SL mới.
 * Kiểm tra `Trade.ResultRetcode()` sau mỗi lệnh; log retcode khi thất bại, không retry mù quá 2 lần.
 
 
-* **Thời gian và phiên:** Mọi logic so sánh giờ giấc quy về số phút-từ-nửa-đêm (0 đến 1439). Tuyệt đối sử dụng `TimeCurrent()` (server time), không dùng `TimeGMT()` hoặc `TimeLocal()` để bảo đảm đồng nhất khi backtest.
+* **Thời gian và phiên:** Mọi logic so sánh giờ giấc quy về số phút-từ-nửa-đêm (0–1439). Tuyệt đối dùng `TimeCurrent()` (server time), không `TimeGMT()`/`TimeLocal()`.
 * Giá SL/TP phải `NormalizeDouble(..., Digits_val)`; lot floor theo `lot_step`, clamp `[lot_min, lot_max]`.
-* Tham số chiến lược luôn qua `input`, không hard-code magic numbers trong logic.
-* Naming: biến global prefix `g_`, struct PascalCase (`OBZone`, `CHoCHResult`, `LossZone`).
-* **Tên file chính thức:** `XAU_SMC_Trader.mq5`, mọi thay đổi logic ghi vào change-log cuối file `.mq5` và cập nhật `MEMORY.md` cùng lúc; đổi tên file phải cập nhật đồng thời Mục 1 + 2.2.
+* Tham số chiến lược luôn qua `input` (ngoại lệ: hằng số kỹ thuật execution qua `#define`).
+* Naming: biến global prefix `g_`, struct PascalCase.
+* **Quy tắc file đa-strategy:** mỗi strategy 1 file `XAU_<Strategy>_Trader.mq5`; file CLOSED đóng băng + tạo file archive riêng (Mục 1.1); copy module từ archive code phải ghi nguồn trong change-log file mới.
+* Mọi thay đổi logic ghi vào change-log cuối file `.mq5` và cập nhật `MEMORY.md` cùng lúc.
 
-```
+### 6.2. Quản trị rủi ro OVERFIT (quy trình bắt buộc)
 
-```
-## 7. Quản trị rủi ro OVERFIT & Phân loại tái sử dụng module
+> STRAT-001 đã minh chứng cả 4 nguồn overfit là có thật. STRAT-002 được thiết kế đối nghịch: chỉ 3 tham số tự do, ít gate, logic đơn giản.
 
-> **Bối cảnh:** Hệ thống hiện có 5 lớp gate chồng nhau (Session → HTF Bias → OB → Sweep/CHoCH → FVG) với ~25–30 tham số tự do, được phát triển tuần tự qua 4 vòng feature A/B test. Đây là cấu hình **có rủi ro overfit CAO** nếu không có quy trình kiểm soát. Mục này là **quy trình bắt buộc**, không phải khuyến nghị.
+**4 nguồn rủi ro:** O1 Parameter explosion (đối sách: 3 tham số) · O2 Data snooping quy trình (T1/T5 đã exhausted — đang xảy ra) · O3 Filter stacking (đối sách: chỉ 2 context filter, mỗi cái tự chứng minh qua A/B) · O4 Overfit khái niệm (đối sách: lưới robustness Mục 3.3).
 
-### 7.1. Phân loại 4 nguồn rủi ro overfit
+**Acceptance Thresholds (thỏa TẤT CẢ):**
+1. **Robustness lân cận:** xê dịch tham số ±50% → kết luận không đảo chiều.
+2. **Đủ mẫu:** ≥ 100 lệnh trên vùng kiểm chứng; dưới mức này chỉ là "gợi ý".
+3. **Out-of-sample pass:** Validation (4.2) đạt ≥ 50% expectancy in-sample, DD ≤ 1.5×.
+4. **Kỳ vọng live:** live ≈ 50–70% backtest là bình thường.
 
-| # | Loại overfit | Biểu hiện trong dự án | Mức độ |
-|---|---|---|---|
-| O1 | **Parameter explosion** | ~25–30 input ảnh hưởng quyết định entry (OB × 3, Sweep × 5, FVG × 5, Bias × 5, Session × 7, Risk × 4...). Mỗi lần chọn default "vì backtest tốt hơn" = 1 phép tối ưu ngầm | Cao |
-| O2 | **Data snooping quy trình** | Cả 4 feature P1-008 → P1-011 đều được chấp nhận nhờ cải thiện kết quả **trên cùng T1/T5**. Không cần chạy optimizer, bộ tham số cuối cùng vẫn đã "nhìn thấy" toàn bộ dữ liệu test → backtest không còn là dự báo mà là ký ức | **Rất cao — đang xảy ra** |
-| O3 | **Filter stacking (overfit cấu trúc)** | 5 lớp gate → lệnh phải thỏa đồng thời đúng bias + đúng session + OB hiệu lực + sweep chuẩn + FVG displacement. Nếu chỉ còn 30–50 lệnh/năm, "edge" đo được có thể chỉ là chuỗi may mắn, thiếu ý nghĩa thống kê | Cao |
-| O4 | **Overfit khái niệm** | Các ngưỡng số hóa khái niệm SMC là tùy ý (`1.5 × ATR`, `0.5 × ATR`, `Peak_Distance = 5`...) — không có lý thuyết nào bảo chứng con số này; dễ fit vào quá khứ của riêng XAUUSD/broker/giai đoạn 2023–2026 | Trung bình |
+### 6.3. Biện pháp bắt buộc (Measures)
 
-### 7.2. Định mức chấp nhận được (Acceptance Thresholds)
-
-Một cấu hình/feature chỉ được coi là "không overfit" khi thỏa **TẤT CẢ**:
-
-1. **Robustness lân cận:** xê dịch từng tham số nhạy cảm ±50% quanh giá trị chọn → kết luận (expectancy > 0, feature có hiệu quả) **không đảo chiều**.
-2. **Đủ mẫu thống kê:** cấu hình cuối (sau mọi filter) phải có **≥ 100 lệnh** trên vùng dữ liệu kiểm chứng; dưới mức này mọi kết luận chỉ là "gợi ý", không phải "bằng chứng".
-3. **Out-of-sample pass:** hiệu năng trên vùng Validation (chưa từng nhìn) đạt **≥ 50%** hiệu năng in-sample (theo expectancy), và max drawdown không vượt 1.5× in-sample.
-4. **Kỳ vọng live thực tế:** mặc định hiệu năng live ≈ 50–70% backtest là bình thường, không phải dấu hiệu bot hỏng.
-
-### 7.3. Biện pháp bắt buộc (Measures)
-
-| # | Biện pháp | Chi tiết áp dụng |
+| # | Biện pháp | Chi tiết |
 |---|---|---|
-| M1 | **Phân vùng dữ liệu 3 vùng** | *Development* (T1/T5 hiện tại — được nhìn, dùng tune); *Validation* (khoảng mới, **chỉ chạy 1 lần** sau khi chốt toàn bộ feature P1); *Final* (chỉ chạy **đúng 1 lần** trước khi live). Tuyệt đối không quay lại chỉnh code/tham số sau khi chạy Validation |
-| M2 | **Walk-forward analysis** | Thay 1 backtest tĩnh bằng cửa sổ trượt: tune đoạn A → kiểm chứng đoạn B → trượt tiếp. Ghi nhận tỷ lệ window pass/fail thay vì 1 con số tổng |
-| M3 | **Kỷ luật A/B song hành** | Mọi feature ON/OFF bằng input (đã có) — khi kết quả tổng tệ, chẩn đoán theo thứ tự: (1) chi phí spread/slippage → (2) số lệnh có đủ mẫu không → (3) tắt từng filter tìm lớp phá → (4) mới kết luận strategy sai. KHÔNG được kết luận từ backtest tổng hợp duy nhất |
-| M4 | **Cross-symbol sanity check** | Chạy cấu hình cuối trên EURUSD/GBPUSD: không nhất thiết lãi nhưng **không được vỡ hoàn toàn** — chứng tỏ logic bắt hiện tượng thị trường chứ không chỉ nhiễu XAUUSD (phụ thuộc P2 Multi-symbol) |
-| M5 | **Ngân sách thất bại (failure budget)** | Mỗi strategy mới test lại trên cùng bộ data = 1 vòng data snooping. Sau **2–3 strategy thất bại** trên cùng dữ liệu, bộ data đó hết giá trị kiểm chứng → bắt buộc lấy dữ liệu mới |
-| M6 | **Ưu tiên đơn giản khi hòa** | Nếu 2 cấu hình cho kết quả tương đương, chọn cấu hình ít filter/ít tham số hơn (Occam's razor). Filter stacking chỉ được giữ nếu mỗi lớp chứng minh được đóng góp độc lập qua A/B |
+| M1 | **Phân vùng dữ liệu** | Xem Mục 4.2 — T1/T5 chỉ còn vai trò Development; Validation = forward demo + cross-broker (+ cross-symbol). Không chỉnh code/tham số sau khi chạy Validation |
+| M2 | **Walk-forward** | Cửa sổ trượt: tune A → kiểm chứng B → trượt tiếp; ghi tỷ lệ window pass/fail |
+| M3 | **Kỷ luật A/B** | Kết quả tệ → chẩn đoán theo thứ tự: (1) chi phí → (2) đủ mẫu? → (3) tắt từng filter → (4) mới kết luận strategy sai |
+| M4 | **Cross-symbol sanity** | EURUSD/GBPUSD không được vỡ hoàn toàn |
+| M5 | **Failure budget** | T1/T5 đã tiêu: 5 vòng feature + 1 âm bản SMC + 1 Development Donchian. STRAT-002 fail → strategy thứ 3 bắt buộc dữ liệu mới |
+| M6 | **Ưu tiên đơn giản** | Hòa nhau → chọn ít filter/ít tham số hơn (Occam's razor) |
+| M7 | **Kết luận âm bản là tài sản** | Strategy CLOSED → tạo `ARCHIVE_STRAT-00X_<Tên>.md` đầy đủ (mẫu A1–A7). Cấm "thử lại" strategy đã CLOSED trên cùng dữ liệu |
 
-### 7.4. Phân loại module theo tính tái sử dụng (khi thay strategy)
+### 6.4. Phân loại tái sử dụng module
 
-Nếu backtest tổng (sau khi đã chẩn đoán theo M3) chứng minh SMC core không có edge trên XAU M5/H1 → **thay "ruột" strategy, giữ hạ tầng**. Phân loại:
+Đã chứng minh thực tiễn qua pivot STRAT-001 → STRAT-002 (~60–70% codebase tái sử dụng):
 
-| Nhóm | Module | Tái sử dụng |
+| Nhóm | Module | Tình trạng |
 |---|---|---|
-| **R1 — Hạ tầng giao dịch** (strategy-agnostic 100%) | `SafeOrderSend`, `ResolveFillingMode` + fallback, `CalcLotSize`, STOPS_LEVEL clamp (khi implement), `IsMarketTradeable`, `SessionHourToMin` | ✅ Giữ nguyên cho mọi strategy |
-| **R2 — Quản trị vốn & lệnh** | `ManagePosition` (partial/trailing theo R), daily cap, loss-streak cooldown, loss-zone blacklist, `OnTradeTransaction` | ✅ Giữ — tài sản quý nhất, độc lập hoàn toàn với cách tìm entry |
-| **R3 — Bộ lọc bối cảnh** | Session/Kill-zone (P1-011), HTF Bias (P1-010), News filter (tương lai) | ✅ Giữ — mọi strategy trend/momentum đều cần đúng giờ + đúng hướng lớn |
-| **R4 — Nguyên liệu thô** | `IsPeak`/`IsTrough`, ATR/EMA handles, Sweep detector, FVG detector | ⚠️ Một phần — swing detection generic; sweep/FVG tái dùng cho biến thể SMC/ICT khác (breaker block, mitigation, liquidity grab) |
-| **R5 — SMC Core (phần thay được)** | `GetOB_H1`, `DetectCHoCH_M5` | ❌ Thay thế — đây chính là "strategy logic" cần đổi khi SMC thất bại |
+| **R1 — Hạ tầng giao dịch** | `SafeOrderSend`, `ResolveFillingMode`, `CalcLotSize`, `GetMinStopDistance`, `IsMarketTradeable` | ✅ Copy nguyên xi |
+| **R2 — Quản trị vốn & lệnh** | `ManagePosition` (+ Chandelier mode), daily cap, cooldown, `OnTradeTransaction`, loss-zone (⚠️ A/B lại) | ✅ Copy, mở rộng |
+| **R3 — Bộ lọc bối cảnh** | HTF Bias (P1-010), Session (P1-011), News filter (tương lai) | ✅ Copy/merge |
+| **R4 — Nguyên liệu thô** | `IsPeak`/`IsTrough`, ATR/EMA handles | ✅ Copy |
+| **R5 — Strategy core (thay được)** | STRAT-001 SMC core → archive; STRAT-002 Donchian core → ACTIVE | 🔄 Thay thế theo Registry |
 
-**Ước lượng:** ~60–70% codebase (R1 + R2 + R3) sống sót qua mọi lần thay strategy.
-
-### 7.5. Signal Contract (điều kiện để "thay ruột" sạch)
-
-Pipeline hiện tại đã vô tình có interface ngầm giữa "tìm tín hiệu" và "thực thi". Để thay strategy không phải phẫu thuật monolith, cần formalize (đi kèm P1 Module hóa, Mục 5 item 4):
+### 6.5. Signal Contract (hướng đi tương lai — P2)
 
 ```mql5
 // Contract tín hiệu — mọi strategy mới chỉ cần trả về struct này,
@@ -295,14 +261,48 @@ Pipeline hiện tại đã vô tình có interface ngầm giữa "tìm tín hi�
 struct TradeSignal
 {
    int    direction;      // +1 BUY, -1 SELL, 0 = no signal
-   double sl_anchor;      // điểm neo SL (tương đương smart_sl hiện tại)
-   double tp_reference;   // mốc tham chiếu TP (tương đương ob.top/bottom)
-   double zone_top;       // vùng POI — để loss-zone blacklist hoạt động
+   double sl_anchor;      // điểm neo SL (Donchian: ATR-based anchor)
+   double tp_reference;   // 0 nếu strategy dùng trailing thay TP cố định
+   double zone_top;       // vùng POI — Donchian: breakout range
    double zone_bottom;
-   string context_tag;    // tag chiến lược cho logging ("SMC_OB_CHOCH", ...)
+   string context_tag;    // tag chiến lược cho logging ("DONCHIAN_H1_BO", ...)
 };
 ```
 
-* Strategy mới (vd: EMA crossover + Donchian breakout) = 1 hàm trả về `TradeSignal` → `OnTick` ráp vào pipeline sẵn có (SL buffer, MinRR, CalcLotSize, SafeOrderSend, ManagePosition).
-* **Nguyên tắc:** mọi feature mới từ nay PHẢI giữ ON/OFF bằng input và không hard-wire vào contract — đảm bảo tháo lắp từng mảnh không phá code.
+* **Nguyên tắc:** mọi feature mới PHẢI giữ ON/OFF bằng input và không hard-wire vào contract.
+
+## 7. Quy trình kỹ thuật lặp lại được (Checklist vận hành)
+
+1. **Trước khi merge bất kỳ feature nào:** compile 0/0 → regression ON/OFF khớp build cũ → backtest A/B theo ma trận của spec.
+2. **Sau khi merge:** cập nhật change-log cuối file `.mq5` + MEMORY.md (Mục 5) cùng lúc.
+3. **Trước mọi vòng backtest đánh giá:** kiểm tra Mục 4.2 — dữ liệu định dùng có thuộc vùng được phép không.
+4. **Khi CLOSED một strategy:** tạo `ARCHIVE_STRAT-00X_<Tên>.md` theo mẫu A1–A7 (kết luận, bằng chứng, chẩn đoán, trạng thái code, bài học, phương án thay thế, lịch sử backtest); chuyển file code sang đóng băng; cập nhật Registry (Mục 1.1) — MEMORY.md không nhân bản chi tiết archive.
+
+## 8. Tham chiếu Archive
+
+| File | Nội dung | Trạng thái |
+|---|---|---|
+| `ARCHIVE_STRAT-001_SMC.md` | STRAT-001 SMC: kết luận FAILED + bằng chứng backtest 7 năm, toàn bộ chi tiết logic (OB/CHoCH/Sweep/FVG/Bias/Session/Clamp), trạng thái code đóng băng, bài học A5, phương án thay thế A6 | Đóng băng 2026-08-04 |
+```
+
+---
+
+## Tóm tắt thay đổi
+
+| Hạng mục | Trước (rev 8) | Sau (rev 9) |
+|---|---|---|
+| Mục 9 Archive trong MEMORY.md | ~150 dòng chi tiết SMC | **1 dòng con trỏ** trong Registry + bảng tham chiếu Mục 8 |
+| File archive | Không có | `ARCHIVE_STRAT-001_SMC.md` tự chứa đủ A1–A7 (thêm A3 cây hàm đóng băng + A7 lịch sử backtest) |
+| Quy tắc archive tương lai | Ghi chung trong M7 | **Quy ước đặt tên + mẫu A1–A7** chuẩn hóa tại Mục 1.1 và checklist Mục 7 |
+| Bài học SMC | Mục 9.4 trong MEMORY | Chuyển về archive A5; MEMORY chỉ tham chiếu (vd "bài học A5.1") |
+| Dung lượng MEMORY.md | Nặng, lẫn lịch sử | Gọn ~40%, chỉ còn platform + ACTIVE + quy trình |
+
+**Cấu trúc project sau thay đổi:**
+
+```
+project_root/
+├── MEMORY.md                    # Platform + STRAT-002 ACTIVE (rev 9)
+├── ARCHIVE_STRAT-001_SMC.md     # Archive đóng băng
+├── XAU_SMC_Trader.mq5           # Code đóng băng
+└── XAU_Donchian_Trader.mq5      # [Sẽ tạo] ACTIVE
 ```
