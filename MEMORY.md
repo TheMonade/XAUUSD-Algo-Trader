@@ -1,9 +1,9 @@
 ```markdown
 # TRẠNG THÁI DỰ ÁN: XAU TRADING BOT PLATFORM (MQL5)
 
-> **File:** `MEMORY.md` — Bộ nhớ dự án tĩnh. Cập nhật lần cuối: 2026-08-04 (rev 9 — tách ARCHIVE STRAT-001 ra file riêng `ARCHIVE_STRAT-001_SMC.md`; MEMORY.md chỉ còn platform + strategy ACTIVE).
+> **File:** `MEMORY.md` — Bộ nhớ dự án tĩnh. Cập nhật lần cuối: 2026-08-05 (rev 10 — Đã tạo file base XAU_Donchian_Trader.mq5 và merge hạ tầng R1-R3).
 > **Lưu ý quan trọng:** Dự án này **KHÔNG phải Python**. Toàn bộ hệ thống là **Expert Advisor (EA) chạy native trên MetaTrader 5**, viết bằng **MQL5**.
-> **File ACTIVE duy nhất:** `XAU_Donchian_Trader.mq5` (sẽ tạo — xem Mục 2.2). File `XAU_SMC_Trader.mq5` **ĐÓNG BĂNG** — CẤM chỉnh sửa, chi tiết lưu trữ tại `ARCHIVE_STRAT-001_SMC.md`.
+> **File ACTIVE duy nhất:** `XAU_Donchian_Trader.mq5` (đã tạo base). File `XAU_SMC_Trader.mq5` **ĐÓNG BĂNG** — CẤM chỉnh sửa, chi tiết lưu trữ tại `ARCHIVE_STRAT-001_SMC.md`.
 
 ## 1. Bối cảnh & Strategy Registry
 
@@ -11,12 +11,12 @@
 * **Kết luận nền tảng đã kiểm chứng:** XAUUSD là tài sản **trend mạnh, quét thanh khoản liên tục** — mean-reversion SL hẹp khung nhỏ bị phạt nặng; trend-following SL rộng theo ATR khung lớn là hướng phù hợp (bằng chứng: `ARCHIVE_STRAT-001_SMC.md` Mục A2).
 * **Triết lý quản trị (xuyên mọi strategy):** Rủi ro cố định theo % balance, quản lý lệnh theo **R-multiple**, chống overtrade, execution tuân thủ rule broker.
 
-### 1.1. Strategy Registry (nguồn sự thật duy nhất về strategy)
+### 1.1. Strategy Registry 
 
 | ID | Tên | Trạng thái | File code | File archive |
 |---|---|---|---|---|
 | STRAT-001 | SMC: H1 OB + M5 CHoCH (+Sweep/FVG/Bias/Session) | **CLOSED — FAILED** | `XAU_SMC_Trader.mq5` (đóng băng) | `ARCHIVE_STRAT-001_SMC.md` |
-| STRAT-002 | Donchian Breakout H1 + ATR Chandelier Trailing | **ACTIVE — giai đoạn spec** | `XAU_Donchian_Trader.mq5` (chưa tạo) | — |
+| STRAT-002 | Donchian Breakout H1 + ATR Chandelier Trailing | **ACTIVE — giai đoạn spec** | `XAU_Donchian_Trader.mq5` (đã tạo base) | — |
 
 * **Quy tắc:** chỉ 1 strategy ACTIVE tại 1 thời điểm. Strategy CLOSED **không bao giờ được "mở lại"** trên cùng bộ dữ liệu (M5/M7, Mục 6.3).
 * **Quy ước archive:** khi CLOSED một strategy → tạo `ARCHIVE_STRAT-00X_<Tên>.md` theo mẫu A1–A7 của `ARCHIVE_STRAT-001_SMC.md`, chuyển file code sang đóng băng, cập nhật Registry. MEMORY.md chỉ giữ 1 dòng con trỏ trong Registry, KHÔNG nhân bản chi tiết.
@@ -48,6 +48,7 @@ ENUM_ORDER_TYPE_FILLING GetSupportedFilling()
    return ORDER_FILLING_RETURN; // fallback (Exchange/Market execution)
 }
 
+
 ```
 
 * Thứ tự ưu tiên: **FOK → IOC → RETURN** (tự dò theo bitmask của broker).
@@ -60,7 +61,7 @@ project_root/
 ├── MEMORY.md                         # File này — bộ nhớ platform (chỉ ACTIVE + quy trình)
 ├── ARCHIVE_STRAT-001_SMC.md          # Archive STRAT-001 (đóng băng, chi tiết logic + bằng chứng)
 ├── XAU_SMC_Trader.mq5                # ĐÓNG BĂNG. CẤM sửa. Kho code nguồn để COPY module R1–R3
-└── XAU_Donchian_Trader.mq5           # [SẼ TẠO] File ACTIVE duy nhất — STRAT-002
+└── XAU_Donchian_Trader.mq5           # File ACTIVE duy nhất — STRAT-002 (Đã có base)
     ├── [Phần copy nguyên xi từ archive code]  # theo bản đồ Mục 2.3
     │     ├── SafeOrderSend()/ResolveFillingMode()/FallbackFillingMode()  # [P0-001]
     │     ├── CalcLotSize(), IsMarketTradeable()
@@ -70,7 +71,8 @@ project_root/
     │     ├── Session: ResolveSessionWindows()/IsInTradeSession()/SessionHourToMin()  # [P1-011 — merge lần đầu vào file này]
     │     ├── GetMinStopDistance() + clamp entry/trailing  # [P0-012 — merge lần đầu vào file này]
     │     └── IsPeak()/IsTrough() (phục vụ HTF Bias)
-    └── [Phần viết mới — Donchian core]   # Mục 3: GetDonchianSignal() hoặc tương đương
+    └── [Phần viết mới — Donchian core]   # Mục 3: GetDonchianSignal() hoặc tương đương (chờ phát triển)
+
 ```
 
 * **Quy ước tên file:** mỗi strategy = 1 file riêng, tên `XAU_<StrategyName>_Trader.mq5`; archive = `ARCHIVE_STRAT-00X_<Tên>.md`. File ACTIVE duy nhất ghi tại Mục 1. File CLOSED đóng băng tại Registry + Mục 2.2 đồng thời.
@@ -79,17 +81,17 @@ project_root/
 ### 2.3. Bản đồ tái sử dụng module (SMC archive → Donchian)
 
 | Module (nguồn: `XAU_SMC_Trader.mq5`) | Nhóm | Hành động cho STRAT-002 |
-|---|---|---|
-| `SafeOrderSend`, `ResolveFillingMode`, `FallbackFillingMode` | R1 |  Copy nguyên xi |
-| `CalcLotSize`, `IsMarketTradeable` | R1 |  Copy nguyên xi |
-| Stops Level Clamp [P0-012] (spec sẵn) | R1 |  Merge lần đầu vào file mới — **P0 bắt buộc** |
-| `ManagePosition` (partial + R-trailing) | R2 |  Copy + **thêm mode Chandelier ATR trailing** (Mục 3.2) |
-| Daily cap, loss-streak cooldown, `OnTradeTransaction` | R2 |  Copy nguyên xi |
-| Loss-zone blacklist | R2 |  Copy + A/B test ON/OFF — Donchian không có "OB zone"; zone = breakout range (giả định mới, không mặc định tin) |
-| HTF Bias Filter [P1-010] | R3 |  Copy nguyên xi — trend context filter |
-| Session Filter [P1-011] (spec sẵn) | R3 |  Merge lần đầu vào file mới |
-| `IsPeak`/`IsTrough`, ATR/EMA handles | R4 |  Copy (phục vụ HTF Bias; ATR H1 cho SL/trailing) |
-| `GetOB_H1`, `DetectCHoCH_M5`, Sweep, FVG | R5 |  Bỏ — thay bằng Donchian core (Mục 3) |
+| --- | --- | --- |
+| `SafeOrderSend`, `ResolveFillingMode`, `FallbackFillingMode` | R1 | Copy nguyên xi |
+| `CalcLotSize`, `IsMarketTradeable` | R1 | Copy nguyên xi |
+| Stops Level Clamp [P0-012] (spec sẵn) | R1 | Đã merge lần đầu vào file mới — **P0 hoàn thành** |
+| `ManagePosition` (partial + R-trailing) | R2 | Copy + **thêm mode Chandelier ATR trailing** (Mục 3.2) |
+| Daily cap, loss-streak cooldown, `OnTradeTransaction` | R2 | Copy nguyên xi |
+| Loss-zone blacklist | R2 | Copy + A/B test ON/OFF — Donchian không có "OB zone"; zone = breakout range (giả định mới, không mặc định tin) |
+| HTF Bias Filter [P1-010] | R3 | Copy nguyên xi — trend context filter |
+| Session Filter [P1-011] (spec sẵn) | R3 | Đã merge lần đầu vào file mới |
+| `IsPeak`/`IsTrough`, ATR/EMA handles | R4 | Copy (phục vụ HTF Bias; ATR H1 cho SL/trailing) |
+| `GetOB_H1`, `DetectCHoCH_M5`, Sweep, FVG | R5 | Bỏ — thay bằng Donchian core (Mục 3) |
 
 ## 3. STRAT-002: Donchian Breakout H1 + ATR Trailing (Thiết kế chốt)
 
@@ -116,7 +118,7 @@ project_root/
 ### 3.3. Tham số tự do (chỉ 3 — chống O1)
 
 | Input | Default | Robustness range bắt buộc |
-|---|---|---|
+| --- | --- | --- |
 | `DC_Period` | 20 | {15, 20, 30, 40} |
 | `DC_SL_ATR_Mult` | 2.5 | {2.0, 2.5, 3.0} |
 | `DC_Trail_ATR_Mult` | 3.0 | {2.5, 3.0, 4.0} |
@@ -146,12 +148,13 @@ Tick → [Có position?] ─Yes→ ManagePosition (Partial + Chandelier trailing
 
 Deal closed → OnTradeTransaction → cập nhật loss streak / reset state
 
+
 ```
 
 ### 4.2. Data Governance (thay thế M1 cũ — vì data lịch sử đã cạn)
 
 | Vùng | Khoảng | Trạng thái |
-|---|---|---|
+| --- | --- | --- |
 | Development | 2019.07 – 2026.07 (T1/T5 cũ) | **EXHAUSTED cho validation** — đã nhìn thấy bởi 5 vòng feature + 1 xác nhận âm bản SMC. Chỉ còn dùng cho Development của STRAT-002 |
 | Validation | Chưa có | Tạo theo kế hoạch bên dưới |
 | Final | Chưa có | Chỉ chạy đúng 1 lần trước live |
@@ -172,8 +175,8 @@ Deal closed → OnTradeTransaction → cập nhật loss streak / reset state
 * [x] **Auto Filling Mode Detection** — [FEAT-P0-001], đã kiểm chứng trong file SMC
 * [x] **Risk Management theo R** — partial/trailing/cooldown, đã kiểm chứng
 * [x] **HTF Bias Filter** — [FEAT-P1-010], hoàn thành, tái dùng cho STRAT-002
-* [ ] **Stops Level Clamp** — [FEAT-P0-012], spec sẵn → **merge vào file STRAT-002 (P0)**
-* [ ] **Session/Kill-zone Filter** — [FEAT-P1-011], spec sẵn → merge vào file STRAT-002
+* [x] **Stops Level Clamp** — [FEAT-P0-012], đã merge vào file STRAT-002 (P0)
+* [x] **Session/Kill-zone Filter** — [FEAT-P1-011], đã merge vào file STRAT-002
 * [ ] **Donchian Core** — FEAT-S2-001, chưa spec chi tiết (thiết kế chốt Mục 3)
 * [ ] **Chandelier Trailing mode** — thêm vào `ManagePosition`, chưa spec
 * [ ] **Loss-zone cho Donchian** — copy sẵn từ archive code, phải A/B test ON/OFF (zone = breakout range là giả định chưa kiểm chứng)
@@ -182,17 +185,18 @@ Deal closed → OnTradeTransaction → cập nhật loss streak / reset state
 
 ### Roadmap
 
-**P0 (làm ngay, theo thứ tự):**
-1. Viết spec chi tiết **FEAT-S2-001** (Donchian core + Chandelier trailing) theo khung Mục 3.
-2. Tạo `XAU_Donchian_Trader.mq5`: copy R1–R3 theo bản đồ 2.3 + merge P0-012 + merge P1-011 + Donchian core. **Cấm sửa file SMC.**
-3. Regression: compile 0 error/0 warning; chạy T1/T5; chạy lưới robustness 3 tham số (Mục 3.3).
+## **P0 (làm ngay, theo thứ tự):**
 
-**P1:**
+1. Viết spec chi tiết **FEAT-S2-001** (Donchian core + Chandelier trailing) theo khung Mục 3.
+~~2. Tạo `XAU_Donchian_Trader.mq5`: copy R1–R3 theo bản đồ 2.3 + merge P0-012 + merge P1-011 + Donchian core.~~ *(Đã hoàn thành việc tạo base và merge các module hạ tầng tái sử dụng. Đang chờ phát triển Donchian core).*
+2. Regression: compile 0 error/0 warning; chạy T1/T5; chạy lưới robustness 3 tham số (Mục 3.3).
+
+## **P1:**
 4. Đánh giá Development theo tiêu chí 3.4 → quyết định GO/NO-GO.
 5. Nếu GO → Validation theo 4.2 (forward demo + cross-broker).
 6. News filter (độ nhạy tăng với breakout strategy).
 
-**P2:**
+## **P2:**
 7. Module hóa `.mqh` + Signal Contract — **chỉ làm sau khi STRAT-002 pass Development**.
 8. Phương án dự phòng nếu STRAT-002 fail: EMA Pullback (B) hoặc Session ORB (C) — phân tích lựa chọn xem `ARCHIVE_STRAT-001_SMC.md` Mục A6. **Lưu ý failure budget (M5): nếu STRAT-002 fail trên T1/T5, strategy thứ 3 PHẢI có dữ liệu mới.**
 
@@ -208,8 +212,6 @@ Deal closed → OnTradeTransaction → cập nhật loss streak / reset state
 * MỌI giá SL/TP trước khi gửi/modify phải thỏa: khoảng cách tới giá thị trường `≥ GetMinStopDistance()` (đọc động: STOPS_LEVEL/FREEZE_LEVEL + sàn 2×spread + safety 2 points).
 * Sau khi clamp SL → tính lại các đại lượng phụ thuộc trên khoảng SL mới.
 * Kiểm tra `Trade.ResultRetcode()` sau mỗi lệnh; log retcode khi thất bại, không retry mù quá 2 lần.
-
-
 * **Thời gian và phiên:** Mọi logic so sánh giờ giấc quy về số phút-từ-nửa-đêm (0–1439). Tuyệt đối dùng `TimeCurrent()` (server time), không `TimeGMT()`/`TimeLocal()`.
 * Giá SL/TP phải `NormalizeDouble(..., Digits_val)`; lot floor theo `lot_step`, clamp `[lot_min, lot_max]`.
 * Tham số chiến lược luôn qua `input` (ngoại lệ: hằng số kỹ thuật execution qua `#define`).
@@ -224,6 +226,7 @@ Deal closed → OnTradeTransaction → cập nhật loss streak / reset state
 **4 nguồn rủi ro:** O1 Parameter explosion (đối sách: 3 tham số) · O2 Data snooping quy trình (T1/T5 đã exhausted — đang xảy ra) · O3 Filter stacking (đối sách: chỉ 2 context filter, mỗi cái tự chứng minh qua A/B) · O4 Overfit khái niệm (đối sách: lưới robustness Mục 3.3).
 
 **Acceptance Thresholds (thỏa TẤT CẢ):**
+
 1. **Robustness lân cận:** xê dịch tham số ±50% → kết luận không đảo chiều.
 2. **Đủ mẫu:** ≥ 100 lệnh trên vùng kiểm chứng; dưới mức này chỉ là "gợi ý".
 3. **Out-of-sample pass:** Validation (4.2) đạt ≥ 50% expectancy in-sample, DD ≤ 1.5×.
@@ -232,7 +235,7 @@ Deal closed → OnTradeTransaction → cập nhật loss streak / reset state
 ### 6.3. Biện pháp bắt buộc (Measures)
 
 | # | Biện pháp | Chi tiết |
-|---|---|---|
+| --- | --- | --- |
 | M1 | **Phân vùng dữ liệu** | Xem Mục 4.2 — T1/T5 chỉ còn vai trò Development; Validation = forward demo + cross-broker (+ cross-symbol). Không chỉnh code/tham số sau khi chạy Validation |
 | M2 | **Walk-forward** | Cửa sổ trượt: tune A → kiểm chứng B → trượt tiếp; ghi tỷ lệ window pass/fail |
 | M3 | **Kỷ luật A/B** | Kết quả tệ → chẩn đoán theo thứ tự: (1) chi phí → (2) đủ mẫu? → (3) tắt từng filter → (4) mới kết luận strategy sai |
@@ -246,7 +249,7 @@ Deal closed → OnTradeTransaction → cập nhật loss streak / reset state
 Đã chứng minh thực tiễn qua pivot STRAT-001 → STRAT-002 (~60–70% codebase tái sử dụng):
 
 | Nhóm | Module | Tình trạng |
-|---|---|---|
+| --- | --- | --- |
 | **R1 — Hạ tầng giao dịch** | `SafeOrderSend`, `ResolveFillingMode`, `CalcLotSize`, `GetMinStopDistance`, `IsMarketTradeable` | ✅ Copy nguyên xi |
 | **R2 — Quản trị vốn & lệnh** | `ManagePosition` (+ Chandelier mode), daily cap, cooldown, `OnTradeTransaction`, loss-zone (⚠️ A/B lại) | ✅ Copy, mở rộng |
 | **R3 — Bộ lọc bối cảnh** | HTF Bias (P1-010), Session (P1-011), News filter (tương lai) | ✅ Copy/merge |
@@ -267,6 +270,7 @@ struct TradeSignal
    double zone_bottom;
    string context_tag;    // tag chiến lược cho logging ("DONCHIAN_H1_BO", ...)
 };
+
 ```
 
 * **Nguyên tắc:** mọi feature mới PHẢI giữ ON/OFF bằng input và không hard-wire vào contract.
@@ -281,28 +285,9 @@ struct TradeSignal
 ## 8. Tham chiếu Archive
 
 | File | Nội dung | Trạng thái |
-|---|---|---|
+| --- | --- | --- |
 | `ARCHIVE_STRAT-001_SMC.md` | STRAT-001 SMC: kết luận FAILED + bằng chứng backtest 7 năm, toàn bộ chi tiết logic (OB/CHoCH/Sweep/FVG/Bias/Session/Clamp), trạng thái code đóng băng, bài học A5, phương án thay thế A6 | Đóng băng 2026-08-04 |
-```
-
----
-
-## Tóm tắt thay đổi
-
-| Hạng mục | Trước (rev 8) | Sau (rev 9) |
-|---|---|---|
-| Mục 9 Archive trong MEMORY.md | ~150 dòng chi tiết SMC | **1 dòng con trỏ** trong Registry + bảng tham chiếu Mục 8 |
-| File archive | Không có | `ARCHIVE_STRAT-001_SMC.md` tự chứa đủ A1–A7 (thêm A3 cây hàm đóng băng + A7 lịch sử backtest) |
-| Quy tắc archive tương lai | Ghi chung trong M7 | **Quy ước đặt tên + mẫu A1–A7** chuẩn hóa tại Mục 1.1 và checklist Mục 7 |
-| Bài học SMC | Mục 9.4 trong MEMORY | Chuyển về archive A5; MEMORY chỉ tham chiếu (vd "bài học A5.1") |
-| Dung lượng MEMORY.md | Nặng, lẫn lịch sử | Gọn ~40%, chỉ còn platform + ACTIVE + quy trình |
-
-**Cấu trúc project sau thay đổi:**
 
 ```
-project_root/
-├── MEMORY.md                    # Platform + STRAT-002 ACTIVE (rev 9)
-├── ARCHIVE_STRAT-001_SMC.md     # Archive đóng băng
-├── XAU_SMC_Trader.mq5           # Code đóng băng
-└── XAU_Donchian_Trader.mq5      # [Sẽ tạo] ACTIVE
+
 ```
