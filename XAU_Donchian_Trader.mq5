@@ -8,79 +8,103 @@
 #property version   "1.00"
 #property strict
 
+#property tester_file "news_XAUUSD_sample.csv"
+
 #include <Trade\Trade.mqh>
 #include <Trade\PositionInfo.mqh>
 #include <Indicators\Indicators.mqh>
 
-// === [FEAT-P0-012] Stops Level Clamp , hằng số kỹ thuật, KHÔNG phải tham số chiến lược ===
-#define STOPS_SAFETY_POINTS   2     // buffer chống giá dịch giữa lúc tính và lúc lệnh tới server
-#define STOPS_SPREAD_MULT     2.0   // sàn động = mult * spread hiện tại (cho broker báo STOPS_LEVEL=0)
+// === [FEAT-P0-012] Stops Level Clamp , hang so ky thuat, KHONG phai tham so chien luoc ===
+#define STOPS_SAFETY_POINTS   2     // buffer chong gia dich giua luc tinh va luc lenh toi server
+#define STOPS_SPREAD_MULT     2.0   // san dong = mult * spread hien tai (cho broker bao STOPS_LEVEL=0)
 
 enum ENUM_HTF_TF_MODE
 {
-   HTF_TF_H4_ONLY    = 0,   // Chỉ dùng H4
-   HTF_TF_D1_ONLY    = 1,   // Chỉ dùng D1
-   HTF_TF_BOTH_AND   = 2,   // H4 và D1 phải đồng thuận
-   HTF_TF_H4_PRIMARY = 3    // H4 chính, D1 fallback khi H4 neutral
+   HTF_TF_H4_ONLY    = 0,   // Chi dung H4
+   HTF_TF_D1_ONLY    = 1,   // Chi dung D1
+   HTF_TF_BOTH_AND   = 2,   // H4 va D1 phai dong thuan
+   HTF_TF_H4_PRIMARY = 3    // H4 chinh, D1 fallback khi H4 neutral
 };
 
 enum ENUM_HTF_METHOD
 {
-   HTF_METHOD_SWING = 0,    // Cấu trúc swing HH/HL (chuẩn SMC)
-   HTF_METHOD_EMA   = 1,    // Giá vs EMA + slope
-   HTF_METHOD_BOTH  = 2     // Cả hai đồng thuận mới định hướng
+   HTF_METHOD_SWING = 0,    // Cau truc swing HH/HL (chuan SMC)
+   HTF_METHOD_EMA   = 1,    // Gia vs EMA + slope
+   HTF_METHOD_BOTH  = 2     // Ca hai dong thuan moi dinh huong
 };
 
 enum ENUM_HTF_NEUTRAL
 {
-   NEUTRAL_ALLOW_ALL = 0,   // Neutral: vẫn cho vào lệnh cả 2 chiều
-   NEUTRAL_BLOCK_ALL = 1    // Neutral: chặn mọi entry mới
+   NEUTRAL_ALLOW_ALL = 0,   // Neutral: van cho vao lenh ca 2 chieu
+   NEUTRAL_BLOCK_ALL = 1    // Neutral: chan moi entry moi
 };
 
 enum ENUM_SESSION_TIMEBASE
 {
-   TIMEBASE_SERVER = 0,   // Giờ nhập = giờ server broker (khuyến nghị cho broker GMT+2/+3)
-   TIMEBASE_GMT    = 1    // Giờ nhập = GMT, quy đổi qua Session_GMT_Offset
+   TIMEBASE_SERVER = 0,   // Gio nhap = gio server broker (khuyen nghi cho broker GMT+2/+3)
+   TIMEBASE_GMT    = 1    // Gio nhap = GMT, quy doi qua Session_GMT_Offset
+};
+
+enum ENUM_TRAIL_MODE
+{
+   TRAIL_CHANDELIER = 0,
+   TRAIL_R_MULTIPLE = 1
 };
 
 input group "=== TRADE SETTINGS ==="
 input double   RiskPercent      = 1.0;
-input double   MinRR            = 1.0;
 input int      MagicNumber      = 202406;
+
+input group "=== DONCHIAN CORE [FEAT-S2-001] ==="
+input int              DC_Period         = 20;
+input double           DC_SL_ATR_Mult    = 2.5;
+input double           DC_Trail_ATR_Mult = 3.0;
+input ENUM_TRAIL_MODE  TrailMode         = TRAIL_CHANDELIER;
+input bool             UsePartialClose   = true;
+input bool             UseLossZoneFilter = true;
 
 input group "=== SL BUFFER (ATR-based) ==="
 input int      ATR_Period_H1    = 14;
 input double   SL_Buffer_ATR_Mult = 0.5;   // buffer = this * H1 ATR
 
 input group "=== HTF BIAS FILTER (H4/D1) [FEAT-P1-010] ==="
-input bool                 UseHTFBiasFilter     = false;             // bật/tắt bias filter (A/B test)
-input ENUM_HTF_TF_MODE     HTF_TF_Mode          = HTF_TF_H4_ONLY;   // khung bias: H4 / D1 / kết hợp
-input ENUM_HTF_METHOD      HTF_Method           = HTF_METHOD_SWING; // phương pháp: swing / EMA / both
-input ENUM_HTF_NEUTRAL     HTF_NeutralPolicy    = NEUTRAL_ALLOW_ALL;// hành vi khi bias = neutral
-input int                  HTF_Lookback         = 120;              // số nến HTF quét swing
-input int                  HTF_SwingDistance    = 3;                // distance xác nhận swing (2 bên)
+input bool                 UseHTFBiasFilter     = false;             // bat/tat bias filter (A/B test)
+input ENUM_HTF_TF_MODE     HTF_TF_Mode          = HTF_TF_H4_ONLY;   // khung bias: H4 / D1 / ket hop
+input ENUM_HTF_METHOD      HTF_Method           = HTF_METHOD_SWING; // phuong phap: swing / EMA / both
+input ENUM_HTF_NEUTRAL     HTF_NeutralPolicy    = NEUTRAL_ALLOW_ALL;// hanh vi khi bias = neutral
+input int                  HTF_Lookback         = 120;              // so nen HTF quet swing
+input int                  HTF_SwingDistance    = 3;                // distance xac nhan swing (2 ben)
 input double               HTF_PromMult         = 0.5;              // prominence = mult * ATR(TF)
-input int                  HTF_EMA_Period       = 50;               // chu kỳ EMA (method EMA/BOTH)
-input double               HTF_EMAFlatATRMult   = 0.05;             // |slope| <= mult*ATR => EMA phẳng => neutral
+input int                  HTF_EMA_Period       = 50;               // chu ky EMA (method EMA/BOTH)
+input double               HTF_EMAFlatATRMult   = 0.05;             // |slope| <= mult*ATR => EMA phang => neutral
 
 input group "=== SESSION / KILL-ZONE FILTER [FEAT-P1-011] ==="
-input bool                  UseSessionFilter      = false;             // bật/tắt session filter (A/B test)
-input ENUM_SESSION_TIMEBASE Session_TimeBase      = TIMEBASE_SERVER;  // giờ nhập theo server hay GMT
-input int                   Session_GMT_Offset    = 2;                // offset broker vs GMT (chỉ dùng khi TIMEBASE_GMT)
+input bool                  UseSessionFilter      = false;             // bat/tat session filter (A/B test)
+input ENUM_SESSION_TIMEBASE Session_TimeBase      = TIMEBASE_SERVER;  // gio nhap theo server hay GMT
+input int                   Session_GMT_Offset    = 2;                // offset broker vs GMT (chi dung khi TIMEBASE_GMT)
 input bool                  UseLondonKZ           = true;             // London Kill-zone
-input double                London_StartHour      = 9.0;              // 9.0 = 09:00 server ≈ 07:00 GMT (broker GMT+2/+3)
-input double                London_EndHour        = 12.0;             // hỗ trợ lẻ: 12.5 = 12:30
+input double                London_StartHour      = 9.0;              // 9.0 = 09:00 server = 07:00 GMT (broker GMT+2/+3)
+input double                London_EndHour        = 12.0;             // ho tro le: 12.5 = 12:30
 input bool                  UseNewYorkKZ          = true;             // New York Kill-zone
-input double                NewYork_StartHour     = 14.0;             // 14:00 server ≈ 12:00 GMT
+input double                NewYork_StartHour     = 14.0;             // 14:00 server = 12:00 GMT
 input double                NewYork_EndHour       = 17.0;
-input bool                  UseCustomSession      = false;            // window tùy chỉnh (Asia/thí nghiệm), hỗ trợ qua nửa đêm
+input bool                  UseCustomSession      = false;            // window tuy chinh (Asia/thi nghiem), ho tro qua nua dem
 input double                Custom_StartHour      = 2.0;
 input double                Custom_EndHour        = 7.0;
-input int                   Session_NoEntryBeforeEndMin = 15;         // chặn entry trong N phút cuối window (0 = tắt)
-input bool                  UseFridayCutoff       = true;             // chặn entry cuối ngày thứ 6
-input double                Friday_CutoffHour     = 20.0;             // sau giờ này thứ 6 không entry mới
-input bool                  UseMondayDelay        = false;            // chặn entry đầu ngày thứ 2
-input double                Monday_OpenHour       = 1.0;              // trước giờ này thứ 2 không entry mới
+input int                   Session_NoEntryBeforeEndMin = 15;         // chan entry trong N phut cuoi window (0 = tat)
+input bool                  UseFridayCutoff       = true;             // chan entry cuoi ngay thu 6
+input double                Friday_CutoffHour     = 20.0;             // sau gio nay thu 6 khong entry moi
+input bool                  UseMondayDelay        = false;            // chan entry dau ngay thu 2
+input double                Monday_OpenHour       = 1.0;              // truoc gio nay thu 2 khong entry moi
+
+input group "=== NEWS FILTER [FEAT-P1-020] ==="
+input bool     UseNewsFilter        = true;  // bat/tat news filter (A/B test) - DEFAULT OFF de lay baseline
+input int      News_BlockBeforeMin  = 30;     // chan entry N phut TRUOC tin
+input int      News_BlockAfterMin   = 30;     // chan entry N phut SAU tin
+input int      News_MinImpact       = 3;      // nguong impact: 1=Low, 2=Medium, 3=High
+input string   News_Currencies      = "USD";  // danh sach currency, phan cach dau phay, VD "USD,EUR"
+input string   News_CsvFile         = "";     // ten file CSV trong MQL5\Files; rong = tu dong "news_<Symbol>.csv"
+input int      News_RefreshMin      = 15;     // chu ky refresh Calendar API (chi live), qua OnTimer
 
 input group "=== POSITION MANAGEMENT (R-multiple based) ==="
 input double   PartialAtR       = 1.0;   // start partial close once profit >= 1.0 x initial risk
@@ -112,7 +136,7 @@ ulong          CurrentTicket    = 0;
 ENUM_ORDER_TYPE_FILLING g_FillingMode      = ORDER_FILLING_FOK;
 int                     g_FillingFallbacks = 0;
 
-bool           g_TrailClampLogged = false;   // [FEAT-P0-012] chống spam log trailing-skip
+bool           g_TrailClampLogged = false;   // [FEAT-P0-012] chong spam log trailing-skip
 
 int            hATR_H1;
 
@@ -120,6 +144,7 @@ datetime       g_CurrentDay        = 0;
 int            g_TradesToday       = 0;
 int            g_ConsecutiveLosses = 0;
 datetime       g_CooldownUntilBarTime = 0;
+datetime       g_MarketClosedCooldown = 0;
 
 double         g_OpenZoneTop    = 0.0;
 double         g_OpenZoneBottom = 0.0;
@@ -139,11 +164,11 @@ int      g_LossZoneCount = 0;
 struct HTFBiasInfo
 {
    int      bias;            // +1 bullish, -1 bearish, 0 neutral
-   int      swing_bias;      // thành phần swing (để log/debug)
-   int      ema_bias;        // thành phần EMA (để log/debug)
-   double   sh1, sh2;        // 2 swing high gần nhất (0 nếu không đủ)
-   double   sl1, sl2;        // 2 swing low gần nhất
-   datetime computed_bar;    // bar time HTF tại lần tính (cache key)
+   int      swing_bias;      // thanh phan swing (de log/debug)
+   int      ema_bias;        // thanh phan EMA (de log/debug)
+   double   sh1, sh2;        // 2 swing high gan nhat (0 neu khong du)
+   double   sl1, sl2;        // 2 swing low gan nhat
+   datetime computed_bar;    // bar time HTF tai lan tinh (cache key)
 };
 
 #define HTF_ATR_PERIOD 14
@@ -155,17 +180,355 @@ HTFBiasInfo g_BiasH4;
 HTFBiasInfo g_BiasD1;
 int         g_BiasCached = 0;
 
-// === [FEAT-P1-011] Session window (đơn vị: phút-từ-nửa-đêm, server time) ===
+// === [FEAT-P1-011] Session window (don vi: phut-tu-nua-dem, server time) ===
 struct SessionWindow
 {
    bool   enabled;
    int    start_min;   // [0, 1440)
-   int    end_min;     // [0, 1440); start_min == end_min -> vô hiệu
+   int    end_min;     // [0, 1440); start_min == end_min -> vo hieu
    string name;        // "LONDON_KZ" / "NY_KZ" / "CUSTOM" , cho logging
 };
 
-SessionWindow g_Windows[3];            // London, NewYork, Custom , resolve 1 lần trong OnInit
-string        g_SessionState = "INIT"; // tên window đang active / "OFF" , key cho transition log
+SessionWindow g_Windows[3];            // London, NewYork, Custom , resolve 1 lan trong OnInit
+string        g_SessionState = "INIT"; // key cho transition log
+
+// === [FEAT-P1-020] News Filter state ===
+struct NewsEvent
+{
+   datetime time;        // server time (ca Calendar API lan CSV deu quy ve server time)
+   int      impact;      // 1=Low, 2=Medium, 3=High
+   string   currency;    // "USD", ...
+   string   name;        // ten su kien, cho logging
+};
+
+NewsEvent g_NewsEvents[];
+int       g_NewsCount        = 0;
+datetime  g_NewsLastRefresh  = 0;
+string    g_NewsState        = "INIT";   // key cho transition log, mau giong g_SessionState
+bool      g_NewsSourceFailed = false;    // da log WARNING 1 lan
+
+// === [FEAT-S2-001] Donchian Core state ===
+struct DonchianSignal
+{
+   int      direction;      // +1 BUY, -1 SELL, 0 = none
+   double   dc_high;
+   double   dc_low;
+   double   atr_entry;
+   datetime signal_bar;     // cache key = iTime(H1, 1)
+};
+DonchianSignal g_DCSignal;
+
+double g_ATRAtEntry        = 0.0;
+double g_HighestSinceEntry = 0.0;
+double g_LowestSinceEntry  = 0.0;
+
+//+------------------------------------------------------------------+
+//| Helper FEAT-P1-020: Parse Currencies                             |
+//+------------------------------------------------------------------+
+int NewsFilter_ParseCurrencies(string raw, string &out[])
+{
+   ushort u_sep = StringGetCharacter(",", 0);
+   string parts[];
+   int count = StringSplit(raw, u_sep, parts);
+   int valid = 0;
+   ArrayResize(out, count);
+   for(int i = 0; i < count; i++)
+   {
+      string c = parts[i];
+      StringTrimLeft(c);
+      StringTrimRight(c);
+      if(StringLen(c) > 0)
+      {
+         out[valid] = c;
+         valid++;
+      }
+   }
+   ArrayResize(out, valid);
+   return valid;
+}
+
+//+------------------------------------------------------------------+
+//| Helper FEAT-P1-020: Sort Events                                  |
+//+------------------------------------------------------------------+
+void NewsFilter_SortEvents()
+{
+   int n = g_NewsCount;
+   bool swapped = true;
+   while(swapped)
+   {
+      swapped = false;
+      for(int i = 1; i < n; i++)
+      {
+         if(g_NewsEvents[i-1].time > g_NewsEvents[i].time)
+         {
+            NewsEvent temp = g_NewsEvents[i-1];
+            g_NewsEvents[i-1] = g_NewsEvents[i];
+            g_NewsEvents[i] = temp;
+            swapped = true;
+         }
+      }
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Helper FEAT-P1-020: Load CSV for Strategy Tester                 |
+//+------------------------------------------------------------------+
+bool NewsFilter_LoadCSV()
+{
+   string fname = News_CsvFile;
+   if(fname == "") fname = "news_" + _Symbol + ".csv";
+
+   // --- [P2] Parse danh sach currency cho phep (dong bo voi live path) ---
+   string curs[];
+   int c_count = NewsFilter_ParseCurrencies(News_Currencies, curs);
+   if(c_count == 0)
+   {
+      Print("[FEAT-P1-020] INIT_FAILED: News_Currencies khong co currency hop le");
+      return false;
+   }
+
+   ResetLastError();
+   // Buoc 1: Mo file trong sandbox MQL5\Files\ cua Tester Agent
+   int h = FileOpen(fname, FILE_READ|FILE_CSV|FILE_ANSI|FILE_SHARE_READ, ';');
+
+   // Buoc 2: Neu chua tim thay, thu tim trong thu muc Common\Files
+   if(h == INVALID_HANDLE)
+      h = FileOpen(fname, FILE_READ|FILE_CSV|FILE_ANSI|FILE_SHARE_READ|FILE_COMMON, ';');
+
+   if(h == INVALID_HANDLE)
+   {
+      int err = GetLastError();
+      PrintFormat("[FEAT-P1-020] INIT_FAILED: Cannot open %s in local or common sandbox, ErrorCode = %d", fname, err);
+      return false;
+   }
+
+   ArrayResize(g_NewsEvents, 0);
+   g_NewsCount = 0;
+
+   // --- [P1 FIX] Bo qua TOAN BO dong header ---
+   // Truoc day: FileReadString 1 lan chi an field "time" -> cac field
+   // "currency;impact;name" bi day xuong vong lap -> lech cot
+   // (log loi: time=currency impact=0)
+   while(!FileIsEnding(h) && !FileIsLineEnding(h))
+      FileReadString(h);
+
+   while(!FileIsEnding(h))
+   {
+      string t_str = FileReadString(h);
+
+      // Bo qua dong trong (trailing newline cuoi file) mot cach an toan
+      if(t_str == "")
+      {
+         while(!FileIsEnding(h) && !FileIsLineEnding(h))
+            FileReadString(h);
+         continue;
+      }
+
+      string curr  = FileReadString(h);
+      string imp_s = FileReadString(h);
+      string name  = FileReadString(h);
+
+      datetime t = StringToTime(t_str);
+      int impact = (int)StringToInteger(imp_s);
+      if(t == 0 || impact < 1 || impact > 3)
+      {
+         PrintFormat("[FEAT-P1-020] INIT_FAILED: CSV parse error time=%s impact=%s", t_str, imp_s);
+         FileClose(h);
+         return false;
+      }
+
+      // --- [P2 FIX] Loc currency giong live path ---
+      bool cur_ok = false;
+      for(int c = 0; c < c_count; c++)
+      {
+         if(curr == curs[c]) { cur_ok = true; break; }
+      }
+      if(!cur_ok) continue;
+
+      if(impact >= News_MinImpact)
+      {
+         int idx = ArraySize(g_NewsEvents);
+         ArrayResize(g_NewsEvents, idx + 1);
+         g_NewsEvents[idx].time     = t;
+         g_NewsEvents[idx].currency = curr;
+         g_NewsEvents[idx].impact   = impact;
+         g_NewsEvents[idx].name     = name;
+         g_NewsCount++;
+      }
+   }
+   FileClose(h);
+   NewsFilter_SortEvents();
+
+   if(g_NewsCount > 0)
+   {
+      PrintFormat("[FEAT-P1-020] Loaded %d events from %s. Range: %s to %s",
+         g_NewsCount, fname, TimeToString(g_NewsEvents[0].time), TimeToString(g_NewsEvents[g_NewsCount-1].time));
+   }
+   else
+   {
+      PrintFormat("[FEAT-P1-020] WARNING: No matching events in %s", fname);
+   }
+   return true;
+}
+
+//+------------------------------------------------------------------+
+//| Core FEAT-P1-020: Refresh Live Calendar Data                     |
+//+------------------------------------------------------------------+
+int NewsFilter_RefreshLive()
+{
+   datetime now = TimeCurrent();
+   datetime from = now - News_BlockBeforeMin * 60;
+   datetime to = now + 7 * 86400;
+   
+   string curs[];
+   int c_count = NewsFilter_ParseCurrencies(News_Currencies, curs);
+   
+   if(c_count == 0)
+   {
+      if(!g_NewsSourceFailed)
+      {
+         PrintFormat("[FEAT-P1-020] WARNING: No valid currencies, filter disabled");
+         g_NewsSourceFailed = true;
+      }
+      return -1;
+   }
+
+   g_NewsCount = 0;
+   ArrayResize(g_NewsEvents, 0);
+
+   for(int i = 0; i < c_count; i++)
+   {
+      MqlCalendarValue values[];
+      if(!CalendarValueHistory(values, from, to, NULL, curs[i]))
+      {
+         int err = GetLastError();
+         if(err == ERR_CALENDAR_TIMEOUT) continue;
+         if(err == ERR_CALENDAR_MORE_DATA || err == ERR_CALENDAR_NO_DATA)
+         {
+            if(!g_NewsSourceFailed && err == ERR_CALENDAR_MORE_DATA)
+            {
+               PrintFormat("[FEAT-P1-020] WARNING: ERR_CALENDAR_MORE_DATA for %s", curs[i]);
+            }
+            continue;
+         }
+      }
+
+      int v_len = ArraySize(values);
+      for(int v = 0; v < v_len; v++)
+      {
+         MqlCalendarEvent ev;
+         if(CalendarEventById(values[v].event_id, ev))
+         {
+            int impact = (int)ev.importance;
+            if(impact >= News_MinImpact)
+            {
+               MqlCalendarCountry country;
+               string c_name = curs[i];
+               if(CalendarCountryById(ev.country_id, country)) c_name = country.currency;
+
+               int idx = ArraySize(g_NewsEvents);
+               ArrayResize(g_NewsEvents, idx + 1);
+               g_NewsEvents[idx].time = values[v].time;
+               g_NewsEvents[idx].impact = impact;
+               g_NewsEvents[idx].currency = c_name;
+               g_NewsEvents[idx].name = ev.name;
+               g_NewsCount++;
+            }
+         }
+      }
+   }
+   
+   NewsFilter_SortEvents();
+   g_NewsLastRefresh = TimeCurrent();
+   return g_NewsCount;
+}
+
+//+------------------------------------------------------------------+
+//| Core FEAT-P1-020: IsNewsBlocked                                  |
+//+------------------------------------------------------------------+
+bool IsNewsBlocked(string &reason)
+{
+   reason = "";
+   if(!UseNewsFilter) return false;
+
+   datetime now = TimeCurrent();
+   datetime block_before = News_BlockBeforeMin * 60;
+   datetime block_after  = News_BlockAfterMin * 60;
+   bool blocked = false;
+
+   for(int i = 0; i < g_NewsCount; i++)
+   {
+      datetime t_e = g_NewsEvents[i].time;
+      if(t_e - block_after > now) break;
+
+      if(now >= t_e - block_before && now <= t_e + block_after)
+      {
+         reason = StringFormat("NEWS:%s:%s", g_NewsEvents[i].currency, g_NewsEvents[i].name);
+         blocked = true;
+         break;
+      }
+   }
+
+   string current_state = blocked ? reason : "";
+   if(current_state != g_NewsState)
+   {
+      if(blocked)
+         PrintFormat("[FEAT-P1-020] BLOCKED: %s @ %s server", reason, TimeToString(now, TIME_MINUTES));
+      else if(g_NewsState != "INIT" && g_NewsState != "")
+         PrintFormat("[FEAT-P1-020] ENTER CLEAR_NEWS @ %s server", TimeToString(now, TIME_MINUTES));
+         
+      g_NewsState = current_state;
+   }
+
+   return blocked;
+}
+
+//+------------------------------------------------------------------+
+//| Init FEAT-P1-020                                                 |
+//+------------------------------------------------------------------+
+bool NewsFilter_Init()
+{
+   if(!UseNewsFilter) return true;
+
+   if((bool)MQLInfoInteger(MQL_TESTER))
+   {
+      return NewsFilter_LoadCSV();
+   }
+   else
+   {
+      int refresh = News_RefreshMin;
+      if(refresh < 5)
+      {
+         refresh = 5;
+         PrintFormat("[FEAT-P1-020] WARNING: News_RefreshMin < 5, clamped to 5");
+      }
+      EventSetTimer(refresh * 60);
+      NewsFilter_RefreshLive();
+      return true;
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Deinit FEAT-P1-020                                               |
+//+------------------------------------------------------------------+
+void NewsFilter_Deinit()
+{
+   if(UseNewsFilter && !(bool)MQLInfoInteger(MQL_TESTER))
+   {
+      EventKillTimer();
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Timer FEAT-P1-020                                                |
+//+------------------------------------------------------------------+
+void NewsFilter_OnTimer()
+{
+   if(!(bool)MQLInfoInteger(MQL_TESTER))
+   {
+      NewsFilter_RefreshLive();
+   }
+}
 
 //+------------------------------------------------------------------+
 int OnInit()
@@ -225,7 +588,12 @@ int OnInit()
    if(UseSessionFilter)
    {
       if(!ResolveSessionWindows())
-         Print("[FEAT-P1-011] WARNING: UseSessionFilter=true nhưng không có window hợp lệ , filter vô hiệu");
+         Print("[FEAT-P1-011] WARNING: UseSessionFilter=true nhung khong co window hop le , filter vo hieu");
+   }
+
+   if(UseNewsFilter)
+   {
+      if(!NewsFilter_Init()) return INIT_FAILED;
    }
 
    ZeroMemory(g_LossZones);
@@ -241,11 +609,21 @@ void OnDeinit(const int reason)
    if(hATR_D1 != INVALID_HANDLE) IndicatorRelease(hATR_D1);
    if(hEMA_H4 != INVALID_HANDLE) IndicatorRelease(hEMA_H4);
    if(hEMA_D1 != INVALID_HANDLE) IndicatorRelease(hEMA_D1);
+   
+   if(UseNewsFilter) NewsFilter_Deinit();
+}
+
+//+------------------------------------------------------------------+
+void OnTimer()
+{
+   if(UseNewsFilter) NewsFilter_OnTimer();
 }
 
 //+------------------------------------------------------------------+
 bool IsMarketTradeable()
 {
+   if(TimeCurrent() < g_MarketClosedCooldown) return false;
+
    long trade_mode = (long)SymbolInfoInteger(_Symbol, SYMBOL_TRADE_MODE);
    if(trade_mode == SYMBOL_TRADE_MODE_DISABLED || trade_mode == SYMBOL_TRADE_MODE_CLOSEONLY)
       return false;
@@ -348,7 +726,7 @@ bool IsInTradeSession(string &reason)
    reason = "";
    MqlDateTime dt;
    TimeToStruct(TimeCurrent(), dt);
-   int cur_min = dt.hour * 60 + dt.min; // BỎ QUA dt.sec
+   int cur_min = dt.hour * 60 + dt.min; // BO QUA dt.sec
    int active_idx = -1;
 
    if(UseFridayCutoff && dt.day_of_week == 5 && cur_min >= (int)MathRound(Friday_CutoffHour * 60.0))
@@ -501,17 +879,118 @@ void OnTradeTransaction(const MqlTradeTransaction& trans,
 
    if(!HasOpenPosition())
    {
-      g_HasOpenZone     = false;
-      PartialDone       = false;
-      InitialVolume     = 0.0;
-      InitialSLDistance = 0.0;
-      LastTrailSL       = 0.0;
+      g_HasOpenZone       = false;
+      PartialDone         = false;
+      InitialVolume       = 0.0;
+      InitialSLDistance   = 0.0;
+      LastTrailSL         = 0.0;
+      
+      g_ATRAtEntry        = 0.0;
+      g_HighestSinceEntry = 0.0;
+      g_LowestSinceEntry  = 0.0;
+   }
+}
+
+//+------------------------------------------------------------------+
+bool GetDonchianSignal(DonchianSignal &sig)
+{
+   datetime bar1 = iTime(_Symbol, PERIOD_H1, 1);
+   if(sig.signal_bar == bar1 && bar1 != 0) return true;
+
+   int count = DC_Period + 3;
+   double high_arr[], low_arr[], close_arr[];
+   ArraySetAsSeries(high_arr, true);
+   ArraySetAsSeries(low_arr, true);
+   ArraySetAsSeries(close_arr, true);
+
+   if(CopyHigh(_Symbol, PERIOD_H1, 0, count, high_arr) < count) return false;
+   if(CopyLow(_Symbol, PERIOD_H1, 0, count, low_arr) < count) return false;
+   if(CopyClose(_Symbol, PERIOD_H1, 0, count, close_arr) < count) return false;
+
+   double atr_arr[];
+   ArraySetAsSeries(atr_arr, true);
+   if(CopyBuffer(hATR_H1, 0, 1, 1, atr_arr) < 1) return false;
+   if(atr_arr[0] <= 0) return false;
+
+   double dc_high = -1.0;
+   double dc_low = 999999.0;
+   for(int i = 2; i <= DC_Period + 1; i++)
+   {
+      if(high_arr[i] > dc_high) dc_high = high_arr[i];
+      if(low_arr[i] < dc_low) dc_low = low_arr[i];
+   }
+
+   double dc_prev_high = -1.0;
+   double dc_prev_low = 999999.0;
+   for(int i = 3; i <= DC_Period + 2; i++)
+   {
+      if(high_arr[i] > dc_prev_high) dc_prev_high = high_arr[i];
+      if(low_arr[i] < dc_prev_low) dc_prev_low = low_arr[i];
+   }
+
+   sig.direction = 0;
+   if(close_arr[1] > dc_high && close_arr[2] <= dc_prev_high)
+      sig.direction = 1;
+   else if(close_arr[1] < dc_low && close_arr[2] >= dc_prev_low)
+      sig.direction = -1;
+
+   sig.dc_high = dc_high;
+   sig.dc_low = dc_low;
+   sig.atr_entry = atr_arr[0];
+   
+   if(sig.direction != 0)
+   {
+      string dir_str = (sig.direction > 0) ? "BUY" : "SELL";
+      PrintFormat("[FEAT-S2-001] SIGNAL %s @ close=%.5f DC_High=%.5f DC_Low=%.5f ATR=%.5f", 
+                  dir_str, close_arr[1], dc_high, dc_low, atr_arr[0]);
+   }
+
+   sig.signal_bar = bar1;
+   return true;
+}
+
+//+------------------------------------------------------------------+
+void UpdateChandelierExtremes(ENUM_POSITION_TYPE pos_type)
+{
+   static datetime LastExtremeBarTime = 0;
+   datetime CurrBar = iTime(_Symbol, PERIOD_H1, 0);
+   if(CurrBar == LastExtremeBarTime) return;
+   
+   if(pos_type == POSITION_TYPE_BUY)
+   {
+      double h1 = iHigh(_Symbol, PERIOD_H1, 1);
+      if(h1 > g_HighestSinceEntry) g_HighestSinceEntry = h1;
+   }
+   else if(pos_type == POSITION_TYPE_SELL)
+   {
+      double l1 = iLow(_Symbol, PERIOD_H1, 1);
+      if(l1 < g_LowestSinceEntry || g_LowestSinceEntry == 0.0) g_LowestSinceEntry = l1;
+   }
+   LastExtremeBarTime = CurrBar;
+}
+
+//+------------------------------------------------------------------+
+double ComputeChandelierSL(ENUM_POSITION_TYPE pos_type)
+{
+   if(pos_type == POSITION_TYPE_BUY)
+   {
+      return NormalizeDouble(g_HighestSinceEntry - DC_Trail_ATR_Mult * g_ATRAtEntry, Digits_val);
+   }
+   else
+   {
+      return NormalizeDouble(g_LowestSinceEntry + DC_Trail_ATR_Mult * g_ATRAtEntry, Digits_val);
    }
 }
 
 //+------------------------------------------------------------------+
 void OnTick()
 {
+   if(UseNewsFilter && !(bool)MQLInfoInteger(MQL_TESTER))
+   {
+      if(TimeCurrent() - g_NewsLastRefresh > News_RefreshMin * 60)
+         NewsFilter_RefreshLive();
+   }
+
    UpdateDailyCounterIfNewDay();
 
    if(HasOpenPosition())
@@ -546,7 +1025,59 @@ void OnTick()
       if(!UpdateHTFBias()) return;
    }
 
-   // POI: Khối lệnh xử lý tín hiệu Donchian sẽ được triển khai tại đây
+   if(!GetDonchianSignal(g_DCSignal)) return;
+   if(g_DCSignal.direction == 0)      return;
+
+   if(UseHTFBiasFilter && !CheckHTFBiasDirection(g_DCSignal.direction)) return;
+
+   if(UseLossZoneFilter && IsZoneBlocked(g_DCSignal.dc_high, g_DCSignal.dc_low)) return;
+
+   if(UseNewsFilter)
+   {
+      string news_reason;
+      if(IsNewsBlocked(news_reason))
+         return;
+   }
+
+   double atr_e   = g_DCSignal.atr_entry;
+   double sl_dist = DC_SL_ATR_Mult * atr_e;
+   double min_stop = GetMinStopDistance();
+
+   if(sl_dist < min_stop)
+   {
+      if(min_stop > 2.0 * sl_dist)
+      {
+         PrintFormat("[FEAT-S2-001] SKIP: clamp %.2f > 2x designed SL %.2f", min_stop, sl_dist);
+         return;
+      }
+      sl_dist = min_stop;
+   }
+
+   double entry = (g_DCSignal.direction > 0) ? Ask : Bid;
+   double sl    = (g_DCSignal.direction > 0)
+                  ? NormalizeDouble(entry - sl_dist, Digits_val)
+                  : NormalizeDouble(entry + sl_dist, Digits_val);
+   
+   double lot = CalcLotSize(sl_dist / Point_val);
+   if(lot <= 0) return;
+
+   bool ok = SafeOrderSend(
+      (g_DCSignal.direction > 0) ? ORDER_TYPE_BUY : ORDER_TYPE_SELL,
+      lot, 0.0, sl, 0.0,
+      "S2_DC_H1_BO");
+
+   if(ok)
+   {
+      g_TradesToday++;
+      g_OpenZoneTop    = g_DCSignal.dc_high;
+      g_OpenZoneBottom = g_DCSignal.dc_low;
+      g_HasOpenZone    = true;
+
+      g_ATRAtEntry        = atr_e;
+      g_HighestSinceEntry = iHigh(_Symbol, PERIOD_H1, 1);
+      g_LowestSinceEntry  = iLow(_Symbol, PERIOD_H1, 1);
+      CurrentTicket       = Trade.ResultOrder();
+   }
 }
 
 //+------------------------------------------------------------------+
@@ -785,6 +1316,8 @@ void ManagePosition()
    double               open_price, current_sl, tp, volume;
    ENUM_POSITION_TYPE   pos_type;
 
+   if(!IsMarketTradeable()) return;
+
    if(!GetOpenPosition(ticket, open_price, current_sl, tp, volume, pos_type))
       return;
 
@@ -795,15 +1328,13 @@ void ManagePosition()
       else return;
    }
 
-   if(!IsMarketTradeable()) return;
-
    double Ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
    double Bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
 
    double profit_price   = (pos_type == POSITION_TYPE_BUY) ? (Bid - open_price) : (open_price - Ask);
    double profit_R        = profit_price / InitialSLDistance;
 
-   if(!PartialDone && profit_R >= PartialAtR)
+   if(UsePartialClose && !PartialDone && profit_R >= PartialAtR)
    {
       double lot_step = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_STEP);
       double lot_min  = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN);
@@ -817,27 +1348,37 @@ void ManagePosition()
          {
             PartialDone = true;
          }
-         else if(Trade.ResultRetcode() == TRADE_RETCODE_INVALID_FILL)
+         else
          {
-            if(FallbackFillingMode())
+            uint retcode = Trade.ResultRetcode();
+            if(retcode == TRADE_RETCODE_MARKET_CLOSED)
             {
-               if(Trade.PositionClosePartial(ticket, lot_to_close))
+               g_MarketClosedCooldown = TimeCurrent() + 60;
+               return;
+            }
+            else if(retcode == TRADE_RETCODE_INVALID_FILL)
+            {
+               if(FallbackFillingMode())
                {
-                  PartialDone = true;
+                  if(Trade.PositionClosePartial(ticket, lot_to_close))
+                  {
+                     PartialDone = true;
+                  }
+                  else
+                  {
+                     if(Trade.ResultRetcode() == TRADE_RETCODE_MARKET_CLOSED) g_MarketClosedCooldown = TimeCurrent() + 60;
+                     PrintFormat("[FEAT-P0-001] Retry partial close failed, retcode: %d, comment: %s", Trade.ResultRetcode(), Trade.ResultComment());
+                  }
                }
                else
                {
-                  PrintFormat("[FEAT-P0-001] Retry partial close failed, retcode: %d, comment: %s", Trade.ResultRetcode(), Trade.ResultComment());
+                  PrintFormat("[FEAT-P0-001] FATAL: All filling modes failed for partial close");
                }
             }
             else
             {
-               PrintFormat("[FEAT-P0-001] FATAL: All filling modes failed for partial close");
+               PrintFormat("[FEAT-P0-001] PositionClosePartial failed, retcode: %d, comment: %s", retcode, Trade.ResultComment());
             }
-         }
-         else
-         {
-            PrintFormat("[FEAT-P0-001] PositionClosePartial failed, retcode: %d, comment: %s", Trade.ResultRetcode(), Trade.ResultComment());
          }
       }
       else
@@ -846,55 +1387,103 @@ void ManagePosition()
       }
    }
 
-   if(profit_R >= TrailingStartR)
+   if(TrailMode == TRAIL_CHANDELIER)
    {
-      if(!GetOpenPosition(ticket, open_price, current_sl, tp, volume, pos_type))
-         return;
+      if(g_ATRAtEntry <= 0) return;
+      UpdateChandelierExtremes(pos_type);
 
-      double trail_distance_price = InitialSLDistance * TrailingStepR;
-      double buffer_price         = InitialSLDistance * TrailingBufferR;
-      double new_sl = 0;
-      bool   should_modify = false;
-
-      if(pos_type == POSITION_TYPE_BUY)
-      {
-         new_sl = NormalizeDouble(Bid - trail_distance_price, Digits_val);
-         if(current_sl == 0 || new_sl > current_sl + buffer_price)
-            should_modify = true;
-      }
-      else if(pos_type == POSITION_TYPE_SELL)
-      {
-         new_sl = NormalizeDouble(Ask + trail_distance_price, Digits_val);
-         if(current_sl == 0 || new_sl < current_sl - buffer_price)
-            should_modify = true;
-      }
+      double new_sl = ComputeChandelierSL(pos_type);
+      bool should_modify = false;
+      if(pos_type == POSITION_TYPE_BUY  && (current_sl == 0 || new_sl > current_sl + Point_val))
+         should_modify = true;
+      if(pos_type == POSITION_TYPE_SELL && (current_sl == 0 || new_sl < current_sl - Point_val))
+         should_modify = true;
 
       if(should_modify)
       {
          double min_stop_t = GetMinStopDistance();
-         bool   sl_valid    = true;
-         if(pos_type == POSITION_TYPE_BUY)
-            sl_valid = (new_sl <= NormalizeDouble(Bid - min_stop_t, Digits_val));
-         else
-            sl_valid = (new_sl >= NormalizeDouble(Ask + min_stop_t, Digits_val));
+         bool sl_valid = (pos_type == POSITION_TYPE_BUY)
+            ? (new_sl <= NormalizeDouble(Bid - min_stop_t, Digits_val))
+            : (new_sl >= NormalizeDouble(Ask + min_stop_t, Digits_val));
 
          if(!sl_valid)
          {
             if(!g_TrailClampLogged)
             {
-               PrintFormat("[FEAT-P0-012] Trailing skip: new_sl=%.2f vi phạm min_stop=%.2f , thử lại tick sau",
-                           new_sl, min_stop_t);
+               PrintFormat("[FEAT-S2-001] Trailing skip: new_sl=%.2f vi pham min_stop=%.2f , thu lai tick sau", new_sl, min_stop_t);
                g_TrailClampLogged = true;
             }
             return;
          }
          g_TrailClampLogged = false;
-      }
 
-      if(should_modify && MathAbs(new_sl - LastTrailSL) > Point_val)
-      {
          if(Trade.PositionModify(ticket, new_sl, tp))
+         {
             LastTrailSL = new_sl;
+            PrintFormat("[FEAT-S2-001] Trailing modify SL: %.5f -> %.5f", current_sl, new_sl);
+         }
+         else if(Trade.ResultRetcode() == TRADE_RETCODE_MARKET_CLOSED)
+         {
+            g_MarketClosedCooldown = TimeCurrent() + 60;
+         }
+      }
+      return;
+   }
+
+   if(TrailMode == TRAIL_R_MULTIPLE)
+   {
+      if(profit_R >= TrailingStartR)
+      {
+         if(!GetOpenPosition(ticket, open_price, current_sl, tp, volume, pos_type))
+            return;
+
+         double trail_distance_price = InitialSLDistance * TrailingStepR;
+         double buffer_price         = InitialSLDistance * TrailingBufferR;
+         double new_sl = 0;
+         bool   should_modify = false;
+
+         if(pos_type == POSITION_TYPE_BUY)
+         {
+            new_sl = NormalizeDouble(Bid - trail_distance_price, Digits_val);
+            if(current_sl == 0 || new_sl > current_sl + buffer_price)
+               should_modify = true;
+         }
+         else if(pos_type == POSITION_TYPE_SELL)
+         {
+            new_sl = NormalizeDouble(Ask + trail_distance_price, Digits_val);
+            if(current_sl == 0 || new_sl < current_sl - buffer_price)
+               should_modify = true;
+         }
+
+         if(should_modify)
+         {
+            double min_stop_t = GetMinStopDistance();
+            bool   sl_valid    = true;
+            if(pos_type == POSITION_TYPE_BUY)
+               sl_valid = (new_sl <= NormalizeDouble(Bid - min_stop_t, Digits_val));
+            else
+               sl_valid = (new_sl >= NormalizeDouble(Ask + min_stop_t, Digits_val));
+
+            if(!sl_valid)
+            {
+               if(!g_TrailClampLogged)
+               {
+                  PrintFormat("[FEAT-P0-012] Trailing skip: new_sl=%.2f vi pham min_stop=%.2f , thu lai tick sau",
+                              new_sl, min_stop_t);
+                  g_TrailClampLogged = true;
+               }
+               return;
+            }
+            g_TrailClampLogged = false;
+         }
+
+         if(should_modify && MathAbs(new_sl - LastTrailSL) > Point_val)
+         {
+            if(Trade.PositionModify(ticket, new_sl, tp))
+               LastTrailSL = new_sl;
+            else if(Trade.ResultRetcode() == TRADE_RETCODE_MARKET_CLOSED)
+               g_MarketClosedCooldown = TimeCurrent() + 60;
+         }
       }
    }
 }
@@ -981,6 +1570,13 @@ bool SafeOrderSend(const ENUM_ORDER_TYPE type, const double lot,
       if(placed && (retcode == TRADE_RETCODE_DONE || retcode == TRADE_RETCODE_PLACED))
          return true;
 
+      if(retcode == TRADE_RETCODE_MARKET_CLOSED)
+      {
+         g_MarketClosedCooldown = TimeCurrent() + 60;
+         PrintFormat("[FEAT-P0-001] Order failed: Market closed. Cooldown 60s.");
+         return false;
+      }
+
       if(retcode == TRADE_RETCODE_INVALID_FILL)
       {
          if(!FallbackFillingMode())
@@ -996,3 +1592,24 @@ bool SafeOrderSend(const ENUM_ORDER_TYPE type, const double lot,
    }
    return false;
 }
+
+//+------------------------------------------------------------------+
+//| CHANGE LOG                                                       |
+//| 2026-08-05 FEAT-S2-001: Donchian Core + Chandelier trailing      |
+//|  - Source modules: giu nguyen R1-R3 tu STRAT-001 archive         |
+//|  - Xoa bo MinRR theo spec thiet ke moi                           |
+//|  - Them nhom input cho Donchian va Trail Mode                    |
+//|  - Bo sung ham GetDonchianSignal, ComputeChandelierSL            |
+//|  - Cap nhat pipeline OnTick thay the khoi POI logic              |
+//|  - Them chuc nang Chandelier Trailing trong ManagePosition       |
+//|  - Cap nhat reset global state trong OnTradeTransaction          |
+//| 2026-08-05 HOTFIX: Market Closed Spam                            |
+//|  - Khai bao bien global g_MarketClosedCooldown                   |
+//|  - Chặn spam log do loi 10018 tai ManagePosition, SafeOrderSend  |
+//| 2026-08-11 FEAT-P1-020: News Filter                              |
+//|  - Spec: SPEC_FEAT-P1-020_NewsFilter.md                          |
+//|  - Dual-source: Calendar API (live) / CSV (tester, MQL_TESTER)   |
+//|  - Chan entry moi +-N phut quanh tin impact >= News_MinImpact    |
+//|  - KHONG can thiep lenh dang mo (ManagePosition nguyen xi)       |
+//|  - Hook: OnInit/OnDeinit/OnTimer/OnTick (sau loss-zone gate)     |
+//+------------------------------------------------------------------+
