@@ -8,7 +8,7 @@
 #property version   "1.00"
 #property strict
 
-#property tester_file "news_XAUUSD_sample.csv"
+#property tester_file "news_XAUUSD.csv"
 
 #include <Trade\Trade.mqh>
 #include <Trade\PositionInfo.mqh>
@@ -103,7 +103,7 @@ input int      News_BlockBeforeMin  = 30;     // chan entry N phut TRUOC tin
 input int      News_BlockAfterMin   = 30;     // chan entry N phut SAU tin
 input int      News_MinImpact       = 3;      // nguong impact: 1=Low, 2=Medium, 3=High
 input string   News_Currencies      = "USD";  // danh sach currency, phan cach dau phay, VD "USD,EUR"
-input string   News_CsvFile         = "";     // ten file CSV trong MQL5\Files; rong = tu dong "news_<Symbol>.csv"
+input string   News_CsvFile         = "news_XAUUSD_sample.csv";     // ten file CSV trong MQL5\Files; rong = tu dong "news_<Symbol>.csv"
 input int      News_RefreshMin      = 15;     // chu ky refresh Calendar API (chi live), qua OnTimer
 
 input group "=== POSITION MANAGEMENT (R-multiple based) ==="
@@ -275,10 +275,11 @@ void NewsFilter_SortEvents()
 //+------------------------------------------------------------------+
 bool NewsFilter_LoadCSV()
 {
-   string fname = News_CsvFile;
-   if(fname == "") fname = "news_" + _Symbol + ".csv";
+   string fname_req = News_CsvFile;
+   if(fname_req == "") fname_req = "news_" + _Symbol + ".csv";
+   string fname_def = "news_" + _Symbol + ".csv";   // canonical name
 
-   // --- [P2] Parse danh sach currency cho phep (dong bo voi live path) ---
+   // --- Parse danh sach currency cho phep (dong bo voi live path) ---
    string curs[];
    int c_count = NewsFilter_ParseCurrencies(News_Currencies, curs);
    if(c_count == 0)
@@ -287,40 +288,63 @@ bool NewsFilter_LoadCSV()
       return false;
    }
 
-   ResetLastError();
-   // Buoc 1: Mo file trong sandbox MQL5\Files\ cua Tester Agent
-   int h = FileOpen(fname, FILE_READ|FILE_CSV|FILE_ANSI|FILE_SHARE_READ, ';');
+   // --- Fallback chain: input local -> input common -> canonical local -> canonical common ---
+   string tried[4];
+   int    tried_n = 0;
+   int    h       = INVALID_HANDLE;
+   string fname   = fname_req;
 
-   // Buoc 2: Neu chua tim thay, thu tim trong thu muc Common\Files
-   if(h == INVALID_HANDLE)
-      h = FileOpen(fname, FILE_READ|FILE_CSV|FILE_ANSI|FILE_SHARE_READ|FILE_COMMON, ';');
+   string names[2];
+   names[0] = fname_req;
+   names[1] = fname_def;
+
+   for(int ni = 0; ni < 2 && h == INVALID_HANDLE; ni++)
+   {
+      if(ni == 1 && names[1] == names[0]) break;   // input da trung canonical
+
+      ResetLastError();
+      h = FileOpen(names[ni], FILE_READ|FILE_CSV|FILE_ANSI|FILE_SHARE_READ, ';');
+      if(tried_n < 4) tried[tried_n++] = names[ni] + " (local)";
+      if(h != INVALID_HANDLE) { fname = names[ni]; break; }
+
+      ResetLastError();
+      h = FileOpen(names[ni], FILE_READ|FILE_CSV|FILE_ANSI|FILE_SHARE_READ|FILE_COMMON, ';');
+      if(tried_n < 4) tried[tried_n++] = names[ni] + " (common)";
+      if(h != INVALID_HANDLE) { fname = names[ni]; break; }
+   }
 
    if(h == INVALID_HANDLE)
    {
-      int err = GetLastError();
-      PrintFormat("[FEAT-P1-020] INIT_FAILED: Cannot open %s in local or common sandbox, ErrorCode = %d", fname, err);
+      string msg = "";
+      for(int i = 0; i < tried_n; i++) msg += "\n   - " + tried[i];
+      PrintFormat("[FEAT-P1-020] INIT_FAILED: Cannot open CSV. Da thu:%s", msg);
+      Print("   Dat file vao MQL5\\Files + khai bao #property tester_file (recompile), hoac Terminal\\Common\\Files");
       return false;
    }
+
+   if(fname != fname_req)
+      PrintFormat("[FEAT-P1-020] WARNING: khong tim thay '%s', fallback sang '%s'", fname_req, fname);
 
    ArrayResize(g_NewsEvents, 0);
    g_NewsCount = 0;
 
-   // --- [P1 FIX] Bo qua TOAN BO dong header ---
-   // Truoc day: FileReadString 1 lan chi an field "time" -> cac field
-   // "currency;impact;name" bi day xuong vong lap -> lech cot
-   // (log loi: time=currency impact=0)
+   // --- Bo qua TOAN BO dong header (FileIsLineEnding, khong lech cot) ---
    while(!FileIsEnding(h) && !FileIsLineEnding(h))
       FileReadString(h);
+
+   int skipped_impact = 0;   // impact hop le nhung ngoai {1,2,3} (Calendar co importance=NONE, VD Bank Holiday)
+   int skipped_empty  = 0;   // dong trong
 
    while(!FileIsEnding(h))
    {
       string t_str = FileReadString(h);
 
-      // Bo qua dong trong (trailing newline cuoi file) mot cach an toan
+      // Bo qua dong trong (trailing newline) mot cach an toan
       if(t_str == "")
       {
          while(!FileIsEnding(h) && !FileIsLineEnding(h))
             FileReadString(h);
+         skipped_empty++;
          continue;
       }
 
@@ -328,16 +352,33 @@ bool NewsFilter_LoadCSV()
       string imp_s = FileReadString(h);
       string name  = FileReadString(h);
 
+      // --- FAIL-FAST chi cho file THAT SU hong: time khong parse duoc ---
       datetime t = StringToTime(t_str);
-      int impact = (int)StringToInteger(imp_s);
-      if(t == 0 || impact < 1 || impact > 3)
+      if(t == 0)
       {
-         PrintFormat("[FEAT-P1-020] INIT_FAILED: CSV parse error time=%s impact=%s", t_str, imp_s);
+         PrintFormat("[FEAT-P1-020] INIT_FAILED: CSV corrupt - unparseable time='%s' (lech cot hoac sai dinh dang)", t_str);
          FileClose(h);
          return false;
       }
 
-      // --- [P2 FIX] Loc currency giong live path ---
+      // --- impact: phai la chuoi so; gia tri ngoai {1,2,3} -> SKIP, khong chet ---
+      long imp_l = StringToInteger(imp_s);
+      bool imp_is_numeric = (StringLen(imp_s) > 0) && (imp_l != 0 || imp_s == "0");
+      if(!imp_is_numeric)
+      {
+         PrintFormat("[FEAT-P1-020] INIT_FAILED: CSV corrupt - impact field='%s' khong phai so tai time=%s", imp_s, t_str);
+         FileClose(h);
+         return false;
+      }
+
+      int impact = (int)imp_l;
+      if(impact < 1 || impact > 3)
+      {
+         skipped_impact++;
+         continue;
+      }
+
+      // --- Loc currency giong live path ---
       bool cur_ok = false;
       for(int c = 0; c < c_count; c++)
       {
@@ -359,15 +400,21 @@ bool NewsFilter_LoadCSV()
    FileClose(h);
    NewsFilter_SortEvents();
 
+   PrintFormat("[FEAT-P1-020] CSV parse summary: loaded=%d, skipped_impact=%d, skipped_empty=%d",
+               g_NewsCount, skipped_impact, skipped_empty);
+
    if(g_NewsCount > 0)
    {
       PrintFormat("[FEAT-P1-020] Loaded %d events from %s. Range: %s to %s",
-         g_NewsCount, fname, TimeToString(g_NewsEvents[0].time), TimeToString(g_NewsEvents[g_NewsCount-1].time));
+                  g_NewsCount, fname,
+                  TimeToString(g_NewsEvents[0].time),
+                  TimeToString(g_NewsEvents[g_NewsCount-1].time));
    }
    else
    {
       PrintFormat("[FEAT-P1-020] WARNING: No matching events in %s", fname);
    }
+
    return true;
 }
 
@@ -1612,4 +1659,3 @@ bool SafeOrderSend(const ENUM_ORDER_TYPE type, const double lot,
 //|  - Chan entry moi +-N phut quanh tin impact >= News_MinImpact    |
 //|  - KHONG can thiep lenh dang mo (ManagePosition nguyen xi)       |
 //|  - Hook: OnInit/OnDeinit/OnTimer/OnTick (sau loss-zone gate)     |
-//+------------------------------------------------------------------+
