@@ -153,7 +153,13 @@ Deal closed → OnTradeTransaction → cập nhật loss streak / reset state
 
 | Vùng | Khoảng | Trạng thái |
 | --- | --- | --- |
-| Development | 2019.07 , 2026.07 (T1/T5 cũ) | **EXHAUSTED cho validation** , đã nhìn thấy bởi 5 vòng feature + 1 xác nhận âm bản SMC. Chỉ còn dùng cho Development của STRAT-002 |
+| Development | 2024.02 – 2026.07 (XAUUSD-VIP, VTMarkets) | EXHAUSTED cho validation.
+  Lưu ý: broker chỉ cung cấp history từ 2024.02.20; vùng 2019.07–2024.02
+  của T1/T5 gốc KHÔNG khả dụng trên symbol này. Đủ mẫu kiểm lại: ~2.4 năm
+  × 5–15 lệnh/tháng ≈ 150–430 lệnh, vẫn ≥ 100 (MEMORY 6.2-2) nhưng biên mỏng.
+  → Validation (forward demo + cross-broker) càng trở nên BẮT BUỘC, vì
+  cross-broker chính là cách phủ lại giai đoạn 2019–2024 nếu broker khác
+  có dữ liệu sâu hơn. |
 | Validation | Chưa có | Tạo theo kế hoạch bên dưới |
 | Final | Chưa có | Chỉ chạy đúng 1 lần trước live |
 
